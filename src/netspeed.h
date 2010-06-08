@@ -32,8 +32,9 @@ G_BEGIN_DECLS
 #define IS_NETSPEED_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE ((klass), NETSPEED_TYPE))
 #define NETSPEED_GET_CLASS(obj)  (G_TYPE_INSTANCE_GET_CLASS ((obj), NETSPEED_TYPE, NetspeedClass))
 
-typedef struct _Netspeed      Netspeed;
-typedef struct _NetspeedClass NetspeedClass;
+typedef struct _Netspeed        Netspeed;
+typedef struct _NetspeedClass   NetspeedClass;
+typedef struct _NetspeedPrivate NetspeedPrivate;
 
 struct _NetspeedClass
 {
@@ -43,6 +44,7 @@ struct _NetspeedClass
 struct _Netspeed
 {
 	PanelApplet parent;
+	NetspeedPrivate *priv;
 };
 
 GType netspeed_get_type (void);
