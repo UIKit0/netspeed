@@ -27,6 +27,8 @@
 #include <panel-applet-gconf.h>
 #include <gconf/gconf-client.h>
 #include "netspeed.h"
+#include "settings.h"
+#include "settings-dialog.h"
 #include "backend.h"
 
 /* Icons for the interfaces */
@@ -61,11 +63,32 @@ static const char LOGO_ICON[] = "netspeed-applet";
 #define GRAPH_VALUES 180
 #define GRAPH_LINES 4
 
+typedef struct _NetspeedApplet NetspeedApplet;
+
+struct _NetspeedPrivate
+{
+	NetspeedApplet *stuff;
+
+	Settings *settings;
+	guint timeout_id;
+};
+
+#define NETSPEED_GET_PRIVATE(o) \
+(G_TYPE_INSTANCE_GET_PRIVATE ((o), NETSPEED_TYPE, NetspeedPrivate))
+
+static void netspeed_class_init (NetspeedClass *klass);
+static void netspeed_init       (Netspeed *self);
+static void netspeed_dispose    (GObject *object);
+static void netspeed_finalize   (GObject *object);
+
+G_DEFINE_TYPE (Netspeed, netspeed, PANEL_TYPE_APPLET);
+
+
 /* A struct containing all the "global" data of the 
  * applet
  * FIXME: This is old stuff and should be moved into NetspeedPrivate
  */
-typedef struct
+struct _NetspeedApplet
 {
 	PanelApplet *applet;
 	GtkWidget *box, *pix_box,
@@ -76,22 +99,21 @@ typedef struct
 	
 	GtkWidget *signalbar;
 	
-	gboolean labels_dont_shrink;
-	
-	DevInfo devinfo;
-	gboolean device_has_changed;
-		
 	int refresh_time;
 	char *up_cmd, *down_cmd;
 	gboolean show_sum, show_bits;
 	gboolean change_icon, auto_change_device;
 	GdkColor in_color, out_color;
+	gboolean labels_dont_shrink;
+	
+	DevInfo devinfo;
+	gboolean device_has_changed;
+		
 	int width;
 	
 	GtkWidget *inbytes_text, *outbytes_text;
-	GtkDialog *details, *settings;
+	GtkWidget *details, *settings_dialog;
 	GtkDrawingArea *drawingarea;
-	GtkWidget *network_device_combo;
 	
 	guint index_old;
 	guint64 in_old[OLD_VALUES], out_old[OLD_VALUES];
@@ -101,7 +123,7 @@ typedef struct
 	GtkWidget *connect_dialog;
 	
 	gboolean show_tooltip;
-} NetspeedApplet;
+};
 
 static const char 
 netspeed_applet_menu_xml [] =
@@ -844,89 +866,6 @@ about_cb(BonoboUIComponent *uic, gpointer data, const gchar *verbname)
 	
 }
 
-/* this basically just retrieves the new devicestring 
- * and then calls applet_device_change() and change_icons()
- */
-static void
-device_change_cb(GtkComboBox *combo, NetspeedApplet *applet)
-{
-	GList *devices;
-	int i, active;
-
-	g_assert(combo);
-	devices = g_object_get_data(G_OBJECT(combo), "devices");
-	active = gtk_combo_box_get_active(combo);
-	g_assert(active > -1);
-
-	if (0 == active) {
-		if (applet->auto_change_device)
-			return;
-		applet->auto_change_device = TRUE;
-	} else {
-		applet->auto_change_device = FALSE;
-		for (i = 1; i < active; i++) {
-			devices = g_list_next(devices);
-		}
-		if (g_str_equal(devices->data, applet->devinfo.name))
-			return;
-		free_device_info(&applet->devinfo);
-		get_device_info(devices->data, &applet->devinfo);
-	}
-
-	applet->device_has_changed = TRUE;
-	update_applet(applet);
-}
-
-
-/* Handle preference dialog response event
- */
-static void
-pref_response_cb (GtkDialog *dialog, gint id, gpointer data)
-{
-    NetspeedApplet *applet = data;
-  
-    if(id == GTK_RESPONSE_HELP){
-        display_help (GTK_WIDGET (dialog), "netspeed_applet-settings");
-	return;
-    }
-    panel_applet_gconf_set_string(PANEL_APPLET(applet->applet), "device", applet->devinfo.name, NULL);
-    panel_applet_gconf_set_bool(PANEL_APPLET(applet->applet), "show_sum", applet->show_sum, NULL);
-    panel_applet_gconf_set_bool(PANEL_APPLET(applet->applet), "show_bits", applet->show_bits, NULL);
-    panel_applet_gconf_set_bool(PANEL_APPLET(applet->applet), "change_icon", applet->change_icon, NULL);
-    panel_applet_gconf_set_bool(PANEL_APPLET(applet->applet), "auto_change_device", applet->auto_change_device, NULL);
-    panel_applet_gconf_set_bool(PANEL_APPLET(applet->applet), "have_settings", TRUE, NULL);
-
-    gtk_widget_destroy(GTK_WIDGET(applet->settings));
-    applet->settings = NULL;
-}
-
-/* Called when the showsum checkbutton is toggled...
- */
-static void
-showsum_change_cb(GtkToggleButton *togglebutton, NetspeedApplet *applet)
-{
-	applet->show_sum = gtk_toggle_button_get_active(togglebutton);
-	applet_change_size_or_orient(applet->applet, -1, (gpointer)applet);
-	change_icons(applet);
-}
-
-/* Called when the showbits checkbutton is toggled...
- */
-static void
-showbits_change_cb(GtkToggleButton *togglebutton, NetspeedApplet *applet)
-{
-	applet->show_bits = gtk_toggle_button_get_active(togglebutton);
-}
-
-/* Called when the changeicon checkbutton is toggled...
- */
-static void
-changeicon_change_cb(GtkToggleButton *togglebutton, NetspeedApplet *applet)
-{
-	applet->change_icon = gtk_toggle_button_get_active(togglebutton);
-	change_icons(applet);
-}
-
 /* Creates the settings dialog
  * After its been closed, take the new values and store
  * them in the gconf database
@@ -934,134 +873,17 @@ changeicon_change_cb(GtkToggleButton *togglebutton, NetspeedApplet *applet)
 static void
 settings_cb(BonoboUIComponent *uic, gpointer data, const gchar *verbname)
 {
-	NetspeedApplet *applet = (NetspeedApplet*)data;
-	GtkWidget *vbox;
-	GtkWidget *hbox;
-	GtkWidget *categories_vbox;
-	GtkWidget *category_vbox;
-	GtkWidget *controls_vbox;
-	GtkWidget *category_header_label;
-	GtkWidget *network_device_hbox;
-	GtkWidget *network_device_label;
-	GtkWidget *indent_label;
-	GtkWidget *show_sum_checkbutton;
-	GtkWidget *show_bits_checkbutton;
-	GtkWidget *change_icon_checkbutton;
-	GtkSizeGroup *category_label_size_group;
-	GtkSizeGroup *category_units_size_group;
-  	gchar *header_str;
-	GList *ptr, *devices;
-	int i, active = -1;
-	
-	g_assert(applet);
-	
-	if (applet->settings)
+	NetspeedApplet *applet = data;
+	NetspeedPrivate *priv = NETSPEED (applet->applet)->priv;
+
+	if (applet->settings_dialog)
 	{
-		gtk_window_present(GTK_WINDOW(applet->settings));
+		gtk_window_present(GTK_WINDOW(applet->settings_dialog));
 		return;
 	}
+	applet->settings_dialog = settings_dialog_new (priv->settings);
 
-	category_label_size_group = gtk_size_group_new(GTK_SIZE_GROUP_HORIZONTAL);
-	category_units_size_group = gtk_size_group_new(GTK_SIZE_GROUP_HORIZONTAL);
-  
-	applet->settings = GTK_DIALOG(gtk_dialog_new_with_buttons(_("Netspeed Preferences"), 
-								  NULL, 
-								  GTK_DIALOG_DESTROY_WITH_PARENT |
-								  GTK_DIALOG_NO_SEPARATOR,	
-								  GTK_STOCK_HELP, GTK_RESPONSE_HELP, 
-								  GTK_STOCK_CLOSE, GTK_RESPONSE_ACCEPT, 
-								  NULL));
-	
-	gtk_window_set_resizable(GTK_WINDOW(applet->settings), FALSE);
-	gtk_window_set_screen(GTK_WINDOW(applet->settings), 
-			      gtk_widget_get_screen(GTK_WIDGET(applet->settings)));
-			       
-	gtk_dialog_set_default_response(GTK_DIALOG(applet->settings), GTK_RESPONSE_CLOSE);
-
-	vbox = gtk_vbox_new(FALSE, 0);
-	gtk_container_set_border_width(GTK_CONTAINER(vbox), 12);
-
-	categories_vbox = gtk_vbox_new(FALSE, 18);
-	gtk_box_pack_start(GTK_BOX (vbox), categories_vbox, TRUE, TRUE, 0);
-
-	category_vbox = gtk_vbox_new(FALSE, 6);
-	gtk_box_pack_start(GTK_BOX (categories_vbox), category_vbox, TRUE, TRUE, 0);
-	
-	header_str = g_strconcat("<span weight=\"bold\">", _("General Settings"), "</span>", NULL);
-	category_header_label = gtk_label_new(header_str);
-	gtk_label_set_use_markup(GTK_LABEL(category_header_label), TRUE);
-	gtk_label_set_justify(GTK_LABEL(category_header_label), GTK_JUSTIFY_LEFT);
-	gtk_misc_set_alignment(GTK_MISC (category_header_label), 0, 0.5);
-	gtk_box_pack_start(GTK_BOX (category_vbox), category_header_label, FALSE, FALSE, 0);
-	g_free(header_str);
-	
-	hbox = gtk_hbox_new(FALSE, 0);
-	gtk_box_pack_start(GTK_BOX (category_vbox), hbox, TRUE, TRUE, 0);
-
-	indent_label = gtk_label_new("    ");
-	gtk_label_set_justify(GTK_LABEL (indent_label), GTK_JUSTIFY_LEFT);
-	gtk_box_pack_start(GTK_BOX (hbox), indent_label, FALSE, FALSE, 0);
-		
-	controls_vbox = gtk_vbox_new(FALSE, 10);
-	gtk_box_pack_start(GTK_BOX(hbox), controls_vbox, TRUE, TRUE, 0);
-
-	network_device_hbox = gtk_hbox_new(FALSE, 6);
-	gtk_box_pack_start(GTK_BOX(controls_vbox), network_device_hbox, TRUE, TRUE, 0);
-	
-	network_device_label = gtk_label_new_with_mnemonic(_("Network _device:"));
-	gtk_label_set_justify(GTK_LABEL(network_device_label), GTK_JUSTIFY_LEFT);
-	gtk_misc_set_alignment(GTK_MISC(network_device_label), 0.0f, 0.5f);
-	gtk_size_group_add_widget(category_label_size_group, network_device_label);
-	gtk_box_pack_start(GTK_BOX (network_device_hbox), network_device_label, FALSE, FALSE, 0);
-	
-	applet->network_device_combo = gtk_combo_box_new_text();
-	gtk_label_set_mnemonic_widget(GTK_LABEL(network_device_label), applet->network_device_combo);
-	gtk_box_pack_start (GTK_BOX (network_device_hbox), applet->network_device_combo, TRUE, TRUE, 0);
-
-	/* Default means device with default route set */
-	gtk_combo_box_append_text(GTK_COMBO_BOX(applet->network_device_combo), _("Default"));
-	ptr = devices = get_available_devices();
-	for (i = 1; ptr; ptr = g_list_next(ptr)) {
-		gtk_combo_box_append_text(GTK_COMBO_BOX(applet->network_device_combo), ptr->data);
-		if (g_str_equal(ptr->data, applet->devinfo.name)) active = i;
-		++i;
-	}
-	if (active < 0 || applet->auto_change_device) {
-		active = 0;
-	}
-	gtk_combo_box_set_active(GTK_COMBO_BOX(applet->network_device_combo), active);
-	g_object_set_data_full(G_OBJECT(applet->network_device_combo), "devices", devices, (GDestroyNotify)free_devices_list);
-
-	show_sum_checkbutton = gtk_check_button_new_with_mnemonic(_("Show _sum instead of in & out"));
-	gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(show_sum_checkbutton), applet->show_sum);
-	gtk_box_pack_start(GTK_BOX(controls_vbox), show_sum_checkbutton, FALSE, FALSE, 0);
-	
-	show_bits_checkbutton = gtk_check_button_new_with_mnemonic(_("Show _bits instead of bytes"));
-	gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(show_bits_checkbutton), applet->show_bits);
-	gtk_box_pack_start(GTK_BOX(controls_vbox), show_bits_checkbutton, FALSE, FALSE, 0);
-	
-	change_icon_checkbutton = gtk_check_button_new_with_mnemonic(_("Change _icon according to the selected device"));
-	gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(change_icon_checkbutton), applet->change_icon);
-  	gtk_box_pack_start(GTK_BOX(controls_vbox), change_icon_checkbutton, FALSE, FALSE, 0);
-
-	g_signal_connect(G_OBJECT (applet->network_device_combo), "changed",
-			 G_CALLBACK(device_change_cb), (gpointer)applet);
-
-	g_signal_connect(G_OBJECT (show_sum_checkbutton), "toggled",
-			 G_CALLBACK(showsum_change_cb), (gpointer)applet);
-
-	g_signal_connect(G_OBJECT (show_bits_checkbutton), "toggled",
-			 G_CALLBACK(showbits_change_cb), (gpointer)applet);
-
-	g_signal_connect(G_OBJECT (change_icon_checkbutton), "toggled",
-			 G_CALLBACK(changeicon_change_cb), (gpointer)applet);
-
-	g_signal_connect(G_OBJECT (applet->settings), "response",
-			 G_CALLBACK(pref_response_cb), (gpointer)applet);
-
-	gtk_container_add(GTK_CONTAINER(applet->settings->vbox), vbox); 
-
-	gtk_widget_show_all(GTK_WIDGET(applet->settings));
+	gtk_widget_show_all (GTK_WIDGET(applet->settings_dialog));
 }
 
 static gboolean
@@ -1152,13 +974,13 @@ showinfo_cb(BonoboUIComponent *uic, gpointer data, const gchar *verbname)
 	}
 	
 	title = g_strdup_printf(_("Device Details for %s"), applet->devinfo.name);
-	applet->details = GTK_DIALOG(gtk_dialog_new_with_buttons(title, 
+	applet->details = gtk_dialog_new_with_buttons(title, 
 		NULL, 
 		GTK_DIALOG_DESTROY_WITH_PARENT |
 	 	GTK_DIALOG_NO_SEPARATOR,
 		GTK_STOCK_CLOSE, GTK_RESPONSE_ACCEPT, 
 		GTK_STOCK_HELP, GTK_RESPONSE_HELP,
-		NULL));
+		NULL);
 	g_free(title);
 
 	gtk_dialog_set_default_response(GTK_DIALOG(applet->details), GTK_RESPONSE_CLOSE);
@@ -1310,7 +1132,7 @@ showinfo_cb(BonoboUIComponent *uic, gpointer data, const gchar *verbname)
 	gtk_box_pack_start(GTK_BOX(box), hbox, FALSE, FALSE, 0);
 	gtk_box_pack_start(GTK_BOX(box), table, FALSE, FALSE, 0);
 
-	gtk_container_add(GTK_CONTAINER(applet->details->vbox), box); 
+	gtk_container_add(GTK_CONTAINER(GTK_DIALOG(applet->details)->vbox), box); 
 	gtk_widget_show_all(GTK_WIDGET(applet->details));
 }	
 
@@ -1408,16 +1230,6 @@ applet_button_press(GtkWidget *widget, GdkEventButton *event, NetspeedApplet *ap
 }	
 
 static void
-applet_destroy(PanelApplet *applet_widget, NetspeedApplet *applet)
-{
-	g_assert(applet);
-	
-	return;
-}
-
-
-
-static void
 update_tooltip(NetspeedApplet* applet)
 {
   GString* tooltip;
@@ -1484,23 +1296,6 @@ netspeed_leave_cb(GtkWidget *widget, GdkEventCrossing *event, gpointer data)
 	return TRUE;
 }
 
-struct _NetspeedPrivate
-{
-	NetspeedApplet *stuff;
-
-	guint timeout_id;
-};
-
-#define NETSPEED_GET_PRIVATE(o) \
-(G_TYPE_INSTANCE_GET_PRIVATE ((o), NETSPEED_TYPE, NetspeedPrivate))
-
-static void netspeed_class_init (NetspeedClass *klass);
-static void netspeed_init       (Netspeed *self);
-static void netspeed_dispose    (GObject *object);
-static void netspeed_finalize   (GObject *object);
-
-G_DEFINE_TYPE (Netspeed, netspeed, PANEL_TYPE_APPLET);
-
 static void
 netspeed_class_init (NetspeedClass *klass)
 {
@@ -1530,6 +1325,7 @@ netspeed_init (Netspeed *self)
 
 	gtk_widget_set_name (GTK_WIDGET(self), "PanelApplet");
 	
+	priv->settings = settings_new();
 	/* Alloc the applet. The "NULL-setting" is really redudant
  	 * but aren't we paranoid?
 	 */
@@ -1606,10 +1402,6 @@ netspeed_init (Netspeed *self)
                            G_CALLBACK(label_size_request_cb),
                            (gpointer)applet);
 
-	g_signal_connect(G_OBJECT(self), "destroy",
-                           G_CALLBACK(applet_destroy),
-                           (gpointer)applet);
-
 	g_signal_connect(G_OBJECT(self), "button-press-event",
                            G_CALLBACK(applet_button_press),
                            (gpointer)applet);
@@ -1628,6 +1420,11 @@ netspeed_dispose (GObject *object)
 {
 	NetspeedPrivate *priv;
 	priv = NETSPEED (object)->priv;
+
+	if (priv->settings) {
+		g_object_unref (priv->settings);
+		priv->settings = NULL;
+	}
 
 	G_OBJECT_CLASS (netspeed_parent_class)->dispose (object);
 }
