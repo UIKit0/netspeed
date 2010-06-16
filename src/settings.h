@@ -51,6 +51,7 @@ struct _Settings
 GType     settings_get_type (void);
 
 Settings* settings_new (void);
+Settings* settings_new_with_gconf_path (const char *gconf_path);
 
 G_END_DECLS
 

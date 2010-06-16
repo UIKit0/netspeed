@@ -866,6 +866,23 @@ about_cb(BonoboUIComponent *uic, gpointer data, const gchar *verbname)
 	
 }
 
+/* Handle preference dialog response event
+ */
+static void
+pref_response_cb (GtkDialog *dialog, gint id, gpointer data)
+{
+    NetspeedApplet *applet = data;
+  
+    if(id == GTK_RESPONSE_HELP){
+        display_help (GTK_WIDGET (dialog), "netspeed_applet-settings");
+	return;
+    }
+
+    gtk_widget_destroy(GTK_WIDGET(applet->settings_dialog));
+    applet->settings_dialog = NULL;
+}
+
+
 /* Creates the settings dialog
  * After its been closed, take the new values and store
  * them in the gconf database
@@ -882,6 +899,8 @@ settings_cb(BonoboUIComponent *uic, gpointer data, const gchar *verbname)
 		return;
 	}
 	applet->settings_dialog = settings_dialog_new (priv->settings);
+	g_signal_connect(G_OBJECT (applet->settings_dialog), "response",
+			 G_CALLBACK(pref_response_cb), applet);
 
 	gtk_widget_show_all (GTK_WIDGET(applet->settings_dialog));
 }
@@ -1325,7 +1344,6 @@ netspeed_init (Netspeed *self)
 
 	gtk_widget_set_name (GTK_WIDGET(self), "PanelApplet");
 	
-	priv->settings = settings_new();
 	/* Alloc the applet. The "NULL-setting" is really redudant
  	 * but aren't we paranoid?
 	 */
@@ -1462,6 +1480,8 @@ netspeed_factory (PanelApplet *applet, const gchar *iid, gpointer data)
 {
 	NetspeedPrivate *priv;
 	char* menu_string;
+	char* dummy_key, *dummy;
+	char* gconf_path;
 
 	g_return_val_if_fail (IS_NETSPEED (applet), FALSE);
 	priv = NETSPEED (applet)->priv;
@@ -1474,7 +1494,6 @@ netspeed_factory (PanelApplet *applet, const gchar *iid, gpointer data)
                             netspeed_applet_menu_verbs,
                             (gpointer)priv->stuff);
 	g_free (menu_string);
-
 
 	/* Get stored settings from the gconf database
 	 */
@@ -1519,7 +1538,21 @@ netspeed_factory (PanelApplet *applet, const gchar *iid, gpointer data)
 			g_free(tmp);
 		}
 	}
-	
+
+	dummy_key = panel_applet_gconf_get_full_key (applet, "dummy");
+	dummy = dummy_key ? strstr (dummy_key, "dummy") : NULL;
+	if (dummy) {
+		dummy[0] = 0;
+		gconf_path = dummy_key;
+		priv->settings = settings_new_with_gconf_path (gconf_path);
+	} else {
+		gconf_path = NULL;
+		g_warning ("Could not figure out gconf-path from dummy-key %s", dummy_key);
+		priv->settings = settings_new ();
+	}
+
+	g_free (dummy_key);
+
 	if (!priv->stuff->devinfo.name) {
 		GList *ptr, *devices = get_available_devices();
 		ptr = devices;

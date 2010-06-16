@@ -56,92 +56,80 @@ settings_dialog_class_init (SettingsDialogClass *klass)
 							 G_PARAM_CONSTRUCT_ONLY | G_PARAM_READWRITE));
 }
 
-/* Handle preference dialog response event
- */
-static void
-pref_response_cb (GtkDialog *dialog, gint id, gpointer data)
-{
-#if 0
-    NetspeedApplet *applet = data;
-  
-    if(id == GTK_RESPONSE_HELP){
-        display_help (GTK_WIDGET (dialog), "netspeed_applet-settings");
-	return;
-    }
-    panel_applet_gconf_set_string(PANEL_APPLET(applet->applet), "device", applet->devinfo.name, NULL);
-    panel_applet_gconf_set_bool(PANEL_APPLET(applet->applet), "show_sum", applet->show_sum, NULL);
-    panel_applet_gconf_set_bool(PANEL_APPLET(applet->applet), "show_bits", applet->show_bits, NULL);
-    panel_applet_gconf_set_bool(PANEL_APPLET(applet->applet), "change_icon", applet->change_icon, NULL);
-    panel_applet_gconf_set_bool(PANEL_APPLET(applet->applet), "auto_change_device", applet->auto_change_device, NULL);
-    panel_applet_gconf_set_bool(PANEL_APPLET(applet->applet), "have_settings", TRUE, NULL);
-
-    gtk_widget_destroy(GTK_WIDGET(applet->settings));
-    applet->settings = NULL;
-#endif
-}
-
-#if 0
 /* this basically just retrieves the new devicestring 
  * and then calls applet_device_change() and change_icons()
  */
 static void
-device_change_cb(GtkComboBox *combo, NetspeedApplet *applet)
+device_change_cb(GtkComboBox *combo, gpointer user_data)
 {
-	GList *devices;
-	int i, active;
+	GtkTreeModel *model;
+	GtkTreeIter iter;
+	char *device;
+	gboolean auto_change_device;
 
-	g_assert(combo);
-	devices = g_object_get_data(G_OBJECT(combo), "devices");
-	active = gtk_combo_box_get_active(combo);
-	g_assert(active > -1);
+	SettingsDialogPrivate *priv = SETTINGS_DIALOG (user_data)->priv;
 
-	if (0 == active) {
-		if (applet->auto_change_device)
-			return;
-		applet->auto_change_device = TRUE;
-	} else {
-		applet->auto_change_device = FALSE;
-		for (i = 1; i < active; i++) {
-			devices = g_list_next(devices);
-		}
-		if (g_str_equal(devices->data, applet->devinfo.name))
-			return;
-		free_device_info(&applet->devinfo);
-		get_device_info(devices->data, &applet->devinfo);
+	model = gtk_combo_box_get_model (combo);
+	if (gtk_combo_box_get_active_iter (combo, &iter)) {
+		gtk_tree_model_get (model,
+						&iter,
+						0, &device,
+						1, &auto_change_device,
+						-1);
+		g_object_set (priv->settings,
+						"default-route",
+						auto_change_device,
+						auto_change_device ? NULL : "device",
+						device,
+						NULL);
 	}
 
-	applet->device_has_changed = TRUE;
-	update_applet(applet);
+	//applet->device_has_changed = TRUE;
+	//update_applet(applet);
 }
 
 
 /* Called when the showsum checkbutton is toggled...
  */
 static void
-showsum_change_cb(GtkToggleButton *togglebutton, NetspeedApplet *applet)
+showsum_change_cb(GtkToggleButton *togglebutton, gpointer user_data)
 {
-	applet->show_sum = gtk_toggle_button_get_active(togglebutton);
-	applet_change_size_or_orient(applet->applet, -1, (gpointer)applet);
-	change_icons(applet);
+	SettingsDialogPrivate *priv = SETTINGS_DIALOG (user_data)->priv;
+
+	g_object_set (priv->settings,
+			"display-sum",
+			gtk_toggle_button_get_active (togglebutton),
+			NULL);
+	//applet_change_size_or_orient(applet->applet, -1, (gpointer)applet);
+	//change_icons(applet);
 }
 
 /* Called when the showbits checkbutton is toggled...
  */
 static void
-showbits_change_cb(GtkToggleButton *togglebutton, NetspeedApplet *applet)
+showbits_change_cb(GtkToggleButton *togglebutton, gpointer user_data)
 {
-	applet->show_bits = gtk_toggle_button_get_active(togglebutton);
+	SettingsDialogPrivate *priv = SETTINGS_DIALOG (user_data)->priv;
+
+	g_object_set (priv->settings,
+			"display-bits",
+			gtk_toggle_button_get_active (togglebutton),
+			NULL);
 }
 
 /* Called when the changeicon checkbutton is toggled...
  */
 static void
-changeicon_change_cb(GtkToggleButton *togglebutton, NetspeedApplet *applet)
+changeicon_change_cb(GtkToggleButton *togglebutton, gpointer user_data)
 {
-	applet->change_icon = gtk_toggle_button_get_active(togglebutton);
-	change_icons(applet);
+	SettingsDialogPrivate *priv = SETTINGS_DIALOG (user_data)->priv;
+
+	g_object_set (priv->settings,
+			"display-specific-icon",
+			gtk_toggle_button_get_active (togglebutton),
+			NULL);
+	//change_icons(applet);
 }
-#endif
 
 static void
 settings_dialog_init (SettingsDialog *self)
@@ -159,6 +147,7 @@ settings_dialog_init (SettingsDialog *self)
 	GtkSizeGroup *category_label_size_group;
 	GtkSizeGroup *category_units_size_group;
 	gchar *header_str;
+	GtkCellRenderer *renderer;
 
 	priv = SETTINGS_DIALOG_GET_PRIVATE (self);
 	self->priv = priv;
@@ -215,9 +204,16 @@ settings_dialog_init (SettingsDialog *self)
 	gtk_size_group_add_widget(category_label_size_group, network_device_label);
 	gtk_box_pack_start(GTK_BOX (network_device_hbox), network_device_label, FALSE, FALSE, 0);
 	
-	priv->network_device_combo = gtk_combo_box_new_text();
+	priv->network_device_combo = gtk_combo_box_new();
 	gtk_label_set_mnemonic_widget(GTK_LABEL(network_device_label), priv->network_device_combo);
 	gtk_box_pack_start (GTK_BOX (network_device_hbox), priv->network_device_combo, TRUE, TRUE, 0);
+
+	renderer = gtk_cell_renderer_text_new ();
+	gtk_cell_layout_pack_start (GTK_CELL_LAYOUT (priv->network_device_combo), renderer, TRUE);
+	gtk_cell_layout_add_attribute (GTK_CELL_LAYOUT (priv->network_device_combo),
+								renderer,
+								"text",
+								0);
 
 	priv->show_sum_checkbutton = gtk_check_button_new_with_mnemonic(_("Show _sum instead of in & out"));
 	gtk_box_pack_start(GTK_BOX(controls_vbox), priv->show_sum_checkbutton, FALSE, FALSE, 0);
@@ -227,23 +223,6 @@ settings_dialog_init (SettingsDialog *self)
 	
 	priv->change_icon_checkbutton = gtk_check_button_new_with_mnemonic(_("Change _icon according to the selected device"));
 	gtk_box_pack_start(GTK_BOX(controls_vbox), priv->change_icon_checkbutton, FALSE, FALSE, 0);
-
-#if 0
-	g_signal_connect(G_OBJECT (priv->network_device_combo), "changed",
-			 G_CALLBACK(device_change_cb), (gpointer)applet);
-
-	g_signal_connect(G_OBJECT (show_sum_checkbutton), "toggled",
-			 G_CALLBACK(showsum_change_cb), (gpointer)applet);
-
-	g_signal_connect(G_OBJECT (show_bits_checkbutton), "toggled",
-			 G_CALLBACK(showbits_change_cb), (gpointer)applet);
-
-	g_signal_connect(G_OBJECT (change_icon_checkbutton), "toggled",
-			 G_CALLBACK(changeicon_change_cb), (gpointer)applet);
-
-	g_signal_connect(G_OBJECT (priv->settings), "response",
-			 G_CALLBACK(pref_response_cb), (gpointer)applet);
-#endif
 
 	gtk_container_add(GTK_CONTAINER (GTK_DIALOG (self)->vbox), vbox);
 }
@@ -255,33 +234,50 @@ settings_dialog_constructed (GObject *object)
 	gboolean show_sum, show_bits, change_icon, auto_change_device;
 	char *device;
 	GList *ptr, *devices;
-	int i, active = -1;
+	GtkListStore *model;
+	GtkTreeIter iter;
 
 	g_object_get (priv->settings,
 				"device", &device,
-				"show-sum", &show_sum,
-				"show-bits", &show_bits,
-				"change-icon", &change_icon,
-				"auto-change-device", &auto_change_device,
+				"display-sum", &show_sum,
+				"display-bits", &show_bits,
+				"display-specific-icon", &change_icon,
+				"default-route", &auto_change_device,
 				NULL);
 
 	gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (priv->show_sum_checkbutton), show_sum);
 	gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (priv->show_bits_checkbutton), show_bits);
 	gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (priv->change_icon_checkbutton), change_icon);
 
-	/* Default means device with default route set */
-	gtk_combo_box_append_text(GTK_COMBO_BOX(priv->network_device_combo), _("Default"));
+	model = gtk_list_store_new (2, G_TYPE_STRING, G_TYPE_BOOLEAN);
+	gtk_combo_box_set_model (GTK_COMBO_BOX (priv->network_device_combo), GTK_TREE_MODEL (model));
 	ptr = devices = get_available_devices();
-	for (i = 1; ptr; ptr = g_list_next(ptr)) {
-		gtk_combo_box_append_text(GTK_COMBO_BOX(priv->network_device_combo), ptr->data);
-		if (g_str_equal(ptr->data, device)) active = i;
-		++i;
+	for (; ptr; ptr = g_list_next(ptr)) {
+		gtk_list_store_append (model, &iter);
+		gtk_list_store_set (model, &iter, 0, ptr->data, 1, FALSE, -1);
+		if (0 == g_strcmp0(ptr->data, device)) {
+			gtk_combo_box_set_active_iter (GTK_COMBO_BOX (priv->network_device_combo), &iter);
+		}
 	}
-	g_object_set_data_full(G_OBJECT(priv->network_device_combo), "devices", devices, (GDestroyNotify)free_devices_list);
-	if (active < 0 || auto_change_device) {
-		active = 0;
+	gtk_list_store_prepend (model, &iter);
+	/* Default means device with default route set */
+	gtk_list_store_set (model, &iter, 0, _("Default"), 1, TRUE, -1);
+	if (auto_change_device ||
+		gtk_combo_box_get_active (GTK_COMBO_BOX (priv->network_device_combo)) == -1) {
+		gtk_combo_box_set_active_iter (GTK_COMBO_BOX (priv->network_device_combo), &iter);
 	}
-	gtk_combo_box_set_active(GTK_COMBO_BOX(priv->network_device_combo), active);
+
+	g_signal_connect(G_OBJECT (priv->network_device_combo), "changed",
+			 G_CALLBACK(device_change_cb), object);
+
+	g_signal_connect(G_OBJECT (priv->show_sum_checkbutton), "toggled",
+			 G_CALLBACK(showsum_change_cb), object);
+
+	g_signal_connect(G_OBJECT (priv->show_bits_checkbutton), "toggled",
+			 G_CALLBACK(showbits_change_cb), object);
+
+	g_signal_connect(G_OBJECT (priv->change_icon_checkbutton), "toggled",
+			 G_CALLBACK(changeicon_change_cb), object);
 
 	if (G_OBJECT_CLASS (settings_dialog_parent_class)->constructed) {
 		G_OBJECT_CLASS (settings_dialog_parent_class)->constructed (object);
@@ -299,7 +295,7 @@ settings_dialog_set_property (GObject    *object,
 
 	switch (property_id) {
 		case PROP_SETTINGS:
-			priv->settings = g_value_get_object (value);
+			priv->settings = g_value_dup_object (value);
 			break;
 	}
 }
