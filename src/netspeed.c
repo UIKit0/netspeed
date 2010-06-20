@@ -29,7 +29,9 @@
 #include "netspeed.h"
 #include "settings.h"
 #include "settings-dialog.h"
+#include "info-dialog.h"
 #include "backend.h"
+#include "utils.h"
 
 /* Icons for the interfaces */
 static const char* const dev_type_icon[DEV_UNKNOWN + 1] = {
@@ -71,6 +73,10 @@ struct _NetspeedPrivate
 
 	Settings *settings;
 	guint timeout_id;
+
+	GtkWidget *settings_dialog;
+	GtkWidget *info_dialog;
+	GtkWidget *connect_dialog;
 };
 
 #define NETSPEED_GET_PRIVATE(o) \
@@ -97,13 +103,9 @@ struct _NetspeedApplet
 	*sum_box, *sum_label, *dev_pix, *qual_pix;
 	GdkPixbuf *qual_pixbufs[4];
 	
-	GtkWidget *signalbar;
-	
 	int refresh_time;
-	char *up_cmd, *down_cmd;
 	gboolean show_sum, show_bits;
 	gboolean change_icon, auto_change_device;
-	GdkColor in_color, out_color;
 	gboolean labels_dont_shrink;
 	
 	DevInfo devinfo;
@@ -111,16 +113,10 @@ struct _NetspeedApplet
 		
 	int width;
 	
-	GtkWidget *inbytes_text, *outbytes_text;
-	GtkWidget *details, *settings_dialog;
-	GtkDrawingArea *drawingarea;
-	
 	guint index_old;
 	guint64 in_old[OLD_VALUES], out_old[OLD_VALUES];
 	double max_graph, in_graph[GRAPH_VALUES], out_graph[GRAPH_VALUES];
 	int index_graph;
-	
-	GtkWidget *connect_dialog;
 	
 	gboolean show_tooltip;
 };
@@ -142,44 +138,6 @@ netspeed_applet_menu_xml [] =
 
 static void
 update_tooltip(NetspeedApplet* applet);
-
-static void
-device_change_cb(GtkComboBox *combo, NetspeedApplet *applet);
-
-static gboolean
-open_uri (GtkWidget *parent, const char *url, GError **error)
-{
-	gboolean ret;
-	char *cmdline;
-	GdkScreen *screen;
-
-	screen = gtk_widget_get_screen (parent);
-	cmdline = g_strconcat ("xdg-open ", url, NULL);
-	ret = gdk_spawn_command_line_on_screen (screen, cmdline, error);
-	g_free (cmdline);
-
-	return ret;
-}
-
-/* Adds a Pango markup "size" to a bytestring
- */
-static void
-add_markup_size(char **string, int size)
-{
-	char *tmp = *string;
-	*string = g_strdup_printf("<span size=\"%d\">%s</span>", size * 1000, tmp);
-	g_free(tmp);
-}
-
-/* Adds a Pango markup "foreground" to a bytestring
- */
-static void
-add_markup_fgcolor(char **string, const char *color)
-{
-	char *tmp = *string;
-	*string = g_strdup_printf("<span foreground=\"%s\">%s</span>", color, tmp);
-	g_free(tmp);
-}
 
 /* Here some rearangement of the icons and the labels occurs
  * according to the panelsize and wether we show in and out
@@ -406,150 +364,6 @@ icon_theme_changed_cb(GtkIconTheme *icon_theme, gpointer user_data)
     change_icons(user_data);
 }    
 
-/* Converts a number of bytes into a human
- * readable string - in [M/k]bytes[/s]
- * The string has to be freed
- */
-static char* 
-bytes_to_string(double bytes, gboolean per_sec, gboolean bits)
-{
-	const char *format;
-	const char *unit;
-	guint kilo; /* no really a kilo : a kilo or kibi */
-
-	if (bits) {
-		bytes *= 8;
-		kilo = 1000;
-	} else
-		kilo = 1024;
-
-	if (bytes < kilo) {
-
-		format = "%.0f %s";
-
-		if (per_sec)
-			unit = bits ? N_("b/s")   : N_("B/s");
-		else
-			unit = bits ? N_("bits")  : N_("bytes");
-
-	} else if (bytes < (kilo * kilo)) {
-		format = (bytes < (100 * kilo)) ? "%.1f %s" : "%.0f %s";
-		bytes /= kilo;
-
-		if (per_sec)
-			unit = bits ? N_("kb/s") : N_("KiB/s");
-		else
-			unit = bits ? N_("kb")   : N_("KiB");
-
-	} else {
-
-		format = "%.1f %s";
-
-		bytes /= kilo * kilo;
-
-		if (per_sec)
-			unit = bits ? N_("Mb/s") : N_("MiB/s");
-		else
-			unit = bits ? N_("Mb")   : N_("MiB");
-	}
-
-	return g_strdup_printf(format, bytes, gettext(unit));
-}
-
-
-/* Redraws the graph drawingarea
- * Some really black magic is going on in here ;-)
- */
-static void
-redraw_graph(NetspeedApplet *applet)
-{
-	GdkGC *gc;
-	GdkColor color;
-	GtkWidget *da = GTK_WIDGET(applet->drawingarea);
-	GdkWindow *window, *real_window = da->window;
-	GdkRectangle ra;
-	GtkStateType state;
-	GdkPoint in_points[GRAPH_VALUES], out_points[GRAPH_VALUES];
-	PangoLayout *layout;
-	PangoRectangle logical_rect;
-	char *text; 
-	int i, offset, w, h;
-	double max_val;
-	
-	gc = gdk_gc_new (real_window);
-	gdk_drawable_get_size(real_window, &w, &h);
-
-	/* use doublebuffering to avoid flickering */
-	window = gdk_pixmap_new(real_window, w, h, -1);
-	
-	/* the graph hight should be: hight/2 <= applet->max_graph < hight */
-	for (max_val = 1; max_val < applet->max_graph; max_val *= 2) ;
-	
-	/* calculate the polygons (GdkPoint[]) for the graphs */ 
-	offset = 0;
-	for (i = (applet->index_graph + 1) % GRAPH_VALUES; applet->in_graph[i] < 0; i = (i + 1) % GRAPH_VALUES)
-		offset++;
-	for (i = offset + 1; i < GRAPH_VALUES; i++)
-	{
-		int index = (applet->index_graph + i) % GRAPH_VALUES;
-		out_points[i].x = in_points[i].x = ((w - 6) * i) / GRAPH_VALUES + 4;
-		in_points[i].y = h - 6 - (int)((h - 8) * applet->in_graph[index] / max_val);
-		out_points[i].y = h - 6 - (int)((h - 8) * applet->out_graph[index] / max_val);
-	}	
-	in_points[offset].x = out_points[offset].x = ((w - 6) * offset) / GRAPH_VALUES + 4;
-	in_points[offset].y = in_points[(offset + 1) % GRAPH_VALUES].y;
-	out_points[offset].y = out_points[(offset + 1) % GRAPH_VALUES].y;
-	
-	/* draw the background */
-	gdk_gc_set_rgb_fg_color (gc, &da->style->black);
-	gdk_draw_rectangle (window, gc, TRUE, 0, 0, w, h);
-	
-	color.red = 0x3a00; color.green = 0x8000; color.blue = 0x1400;
-	gdk_gc_set_rgb_fg_color(gc, &color);
-	gdk_draw_rectangle (window, gc, FALSE, 2, 2, w - 6, h - 6);
-	
-	for (i = 0; i < GRAPH_LINES; i++) {
-		int y = 2 + ((h - 6) * i) / GRAPH_LINES; 
-		gdk_draw_line(window, gc, 2, y, w - 4, y);
-	}
-	
-	/* draw the polygons */
-	gdk_gc_set_line_attributes(gc, 2, GDK_LINE_SOLID, GDK_CAP_ROUND, GDK_JOIN_ROUND);
-	gdk_gc_set_rgb_fg_color(gc, &applet->in_color);
-	gdk_draw_lines(window, gc, in_points + offset, GRAPH_VALUES - offset);
-	gdk_gc_set_rgb_fg_color(gc, &applet->out_color);
-	gdk_draw_lines(window, gc, out_points + offset, GRAPH_VALUES - offset);
-
-	/* draw the 2 labels */
-	state = GTK_STATE_NORMAL;
-	ra.x = 0; ra.y = 0;
-	ra.width = w; ra.height = h;
-	
-	text = bytes_to_string(max_val, TRUE, applet->show_bits);
-	add_markup_fgcolor(&text, "white");
-	layout = gtk_widget_create_pango_layout (da, NULL);
-	pango_layout_set_markup(layout, text, -1);
-	g_free (text);
-	gtk_paint_layout(da->style, window, state,	FALSE, &ra, da, "max_graph", 3, 2, layout);
-	g_object_unref(G_OBJECT(layout));
-
-	text = bytes_to_string(0.0, TRUE, applet->show_bits);
-	add_markup_fgcolor(&text, "white");
-	layout = gtk_widget_create_pango_layout (da, NULL);
-	pango_layout_set_markup(layout, text, -1);
-	pango_layout_get_pixel_extents (layout, NULL, &logical_rect);
-	g_free (text);
-	gtk_paint_layout(da->style, window, state,	FALSE, &ra, da, "max_graph", 3, h - 4 - logical_rect.height, layout);
-	g_object_unref(G_OBJECT(layout));
-
-	/* draw the pixmap to the real window */	
-	gdk_draw_drawable(real_window, gc, window, 0, 0, 0, 0, w, h);
-	
-	g_object_unref(G_OBJECT(gc));
-	g_object_unref(G_OBJECT(window));
-}
-
-
 static gboolean
 set_applet_devinfo(NetspeedApplet* applet, const char* iface)
 {
@@ -597,9 +411,9 @@ search_for_up_if(NetspeedApplet *applet)
 static void
 update_applet(NetspeedApplet *applet)
 {
+	NetspeedPrivate *priv = NETSPEED (applet->applet)->priv;
 	guint64 indiff, outdiff;
 	double inrate, outrate;
-	char *inbytes, *outbytes;
 	int i;
 	DevInfo oldinfo;
 	
@@ -669,19 +483,10 @@ update_applet(NetspeedApplet *applet)
 		if (applet->devinfo.up)
 			update_quality_icon(applet);
 		
-		if (applet->signalbar) {
-			float quality;
-			char *text;
+	}
 
-			quality = applet->devinfo.qual / 100.0f;
-			if (quality > 1.0)
-				quality = 1.0;
-
-			text = g_strdup_printf ("%d %%", applet->devinfo.qual);
-			gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (applet->signalbar), quality);
-			gtk_progress_bar_set_text (GTK_PROGRESS_BAR (applet->signalbar), text);
-			g_free(text);
-		}
+	if (priv->info_dialog) {
+		info_dialog_update (INFO_DIALOG (priv->info_dialog));
 	}
 
 	update_tooltip(applet);
@@ -694,21 +499,6 @@ update_applet(NetspeedApplet *applet)
 		gtk_label_set_markup(GTK_LABEL(applet->out_label), applet->devinfo.tx_rate);
 	}
 
-	/* Refresh the values of the Infodialog */
-	if (applet->inbytes_text) {
-		inbytes = bytes_to_string((double)applet->devinfo.rx, FALSE, applet->show_bits);
-		gtk_label_set_text(GTK_LABEL(applet->inbytes_text), inbytes);
-		g_free(inbytes);
-	}	
-	if (applet->outbytes_text) {
-		outbytes = bytes_to_string((double)applet->devinfo.tx, FALSE, applet->show_bits);
-		gtk_label_set_text(GTK_LABEL(applet->outbytes_text), outbytes);
-		g_free(outbytes);
-	}
-	/* Redraw the graph of the Infodialog */
-	if (applet->drawingarea)
-		redraw_graph(applet);
-	
 	/* Save old values... */
 	applet->in_old[applet->index_old] = applet->devinfo.rx;
 	applet->out_old[applet->index_old] = applet->devinfo.tx;
@@ -788,9 +578,11 @@ display_help (GtkWidget *dialog, const gchar *section)
 /* Opens gnome help application
  */
 static void
-help_cb (BonoboUIComponent *uic, NetspeedApplet *ap, const gchar *verbname)
+help_cb (BonoboUIComponent *uic, gpointer data, const gchar *verbname)
 {
-	display_help (GTK_WIDGET (ap->applet), NULL);
+	Netspeed *applet = NETSPEED (data);
+
+	display_help (GTK_WIDGET (applet), NULL);
 }
 
 enum {
@@ -871,15 +663,15 @@ about_cb(BonoboUIComponent *uic, gpointer data, const gchar *verbname)
 static void
 pref_response_cb (GtkDialog *dialog, gint id, gpointer data)
 {
-    NetspeedApplet *applet = data;
-  
-    if(id == GTK_RESPONSE_HELP){
-        display_help (GTK_WIDGET (dialog), "netspeed_applet-settings");
-	return;
-    }
+	NetspeedPrivate *priv = NETSPEED (data)->priv;
 
-    gtk_widget_destroy(GTK_WIDGET(applet->settings_dialog));
-    applet->settings_dialog = NULL;
+    if (id == GTK_RESPONSE_HELP) {
+		display_help (GTK_WIDGET (dialog), "netspeed_applet-settings");
+		return;
+	}
+
+	gtk_widget_destroy (priv->settings_dialog);
+	priv->settings_dialog = NULL;
 }
 
 
@@ -890,81 +682,42 @@ pref_response_cb (GtkDialog *dialog, gint id, gpointer data)
 static void
 settings_cb(BonoboUIComponent *uic, gpointer data, const gchar *verbname)
 {
-	NetspeedApplet *applet = data;
-	NetspeedPrivate *priv = NETSPEED (applet->applet)->priv;
+	Netspeed *applet = NETSPEED (data);
+	NetspeedPrivate *priv = applet->priv;
 
-	if (applet->settings_dialog)
+	if (priv->settings_dialog)
 	{
-		gtk_window_present(GTK_WINDOW(applet->settings_dialog));
+		gtk_window_present(GTK_WINDOW(priv->settings_dialog));
 		return;
 	}
-	applet->settings_dialog = settings_dialog_new (priv->settings);
-	g_signal_connect(G_OBJECT (applet->settings_dialog), "response",
-			 G_CALLBACK(pref_response_cb), applet);
+	priv->settings_dialog = settings_dialog_new (priv->settings);
+	g_signal_connect (G_OBJECT (priv->settings_dialog), "response",
+			 G_CALLBACK (pref_response_cb), applet);
 
-	gtk_widget_show_all (GTK_WIDGET(applet->settings_dialog));
-}
-
-static gboolean
-da_expose_event(GtkWidget *widget, GdkEventExpose *event, gpointer data)
-{
-	NetspeedApplet *applet = (NetspeedApplet*)data;
-	
-	redraw_graph(applet);
-	
-	return FALSE;
-}	
-
-static void
-incolor_changed_cb (GtkColorButton *cb, gpointer data)
-{
-	NetspeedApplet *applet = (NetspeedApplet*)data;
-	gchar *color;
-	GdkColor clr;
-	
-	gtk_color_button_get_color (cb, &clr);
-	applet->in_color = clr;
-	
-	color = g_strdup_printf ("#%04x%04x%04x", clr.red, clr.green, clr.blue);
-	panel_applet_gconf_set_string (PANEL_APPLET (applet->applet), "in_color", color, NULL);
-	panel_applet_gconf_set_bool (PANEL_APPLET (applet->applet), "have_settings", TRUE, NULL);
-	g_free (color);
-}
-
-static void
-outcolor_changed_cb (GtkColorButton *cb, gpointer data)
-{
-	NetspeedApplet *applet = (NetspeedApplet*)data;
-	gchar *color;
-	GdkColor clr;
-	
-	gtk_color_button_get_color (cb, &clr);
-	applet->out_color = clr;
-	
-	color = g_strdup_printf ("#%04x%04x%04x", clr.red, clr.green, clr.blue);
-	panel_applet_gconf_set_string (PANEL_APPLET (applet->applet), "out_color", color, NULL);
-	panel_applet_gconf_set_bool (PANEL_APPLET (applet->applet), "have_settings", TRUE, NULL);
-	g_free (color);
+	gtk_widget_show_all (priv->settings_dialog);
 }
 
 /* Handle info dialog response event
  */
 static void
-info_response_cb (GtkDialog *dialog, gint id, NetspeedApplet *applet)
+info_response_cb (GtkDialog *dialog, gint id, gpointer data)
 {
-  
-	if(id == GTK_RESPONSE_HELP){
+	NetspeedPrivate *priv = NETSPEED (data)->priv;
+
+	if (id == GTK_RESPONSE_HELP){
 		display_help (GTK_WIDGET (dialog), "netspeed_applet-details");
 		return;
 	}
 	
-	gtk_widget_destroy(GTK_WIDGET(applet->details));
-	
-	applet->details = NULL;
+	gtk_widget_destroy (priv->info_dialog);
+	priv->info_dialog = NULL;
+
+#if 0
 	applet->inbytes_text = NULL;
 	applet->outbytes_text = NULL;
 	applet->drawingarea = NULL;
 	applet->signalbar = NULL;
+#endif
 }
 
 /* Creates the details dialog
@@ -972,188 +725,21 @@ info_response_cb (GtkDialog *dialog, gint id, NetspeedApplet *applet)
 static void
 showinfo_cb(BonoboUIComponent *uic, gpointer data, const gchar *verbname)
 {
-	NetspeedApplet *applet = (NetspeedApplet*)data;
-	GtkWidget *box, *hbox;
-	GtkWidget *table, *da_frame;
-	GtkWidget *ip_label, *netmask_label;
-	GtkWidget *hwaddr_label, *ptpip_label;
-	GtkWidget *ip_text, *netmask_text;
-	GtkWidget *hwaddr_text, *ptpip_text;
-	GtkWidget *inbytes_label, *outbytes_label;
-	GtkWidget *incolor_sel, *incolor_label;
-	GtkWidget *outcolor_sel, *outcolor_label;
-	char *title;
+	Netspeed *applet = NETSPEED (data);
+	NetspeedPrivate *priv = applet->priv;
 	
-	g_assert(applet);
-	
-	if (applet->details)
+	if (priv->info_dialog)
 	{
-		gtk_window_present(GTK_WINDOW(applet->details));
+		gtk_window_present (GTK_WINDOW (priv->info_dialog));
 		return;
 	}
 	
-	title = g_strdup_printf(_("Device Details for %s"), applet->devinfo.name);
-	applet->details = gtk_dialog_new_with_buttons(title, 
-		NULL, 
-		GTK_DIALOG_DESTROY_WITH_PARENT |
-	 	GTK_DIALOG_NO_SEPARATOR,
-		GTK_STOCK_CLOSE, GTK_RESPONSE_ACCEPT, 
-		GTK_STOCK_HELP, GTK_RESPONSE_HELP,
-		NULL);
-	g_free(title);
+	priv->info_dialog = info_dialog_new (priv->settings);
+	g_signal_connect (G_OBJECT (priv->info_dialog), "response",
+			 G_CALLBACK (info_response_cb), applet);
 
-	gtk_dialog_set_default_response(GTK_DIALOG(applet->details), GTK_RESPONSE_CLOSE);
-	
-	box = gtk_vbox_new(FALSE, 10);
-	gtk_container_set_border_width(GTK_CONTAINER(box), 12);
-	
-	table = gtk_table_new(4, 4, FALSE);
-	gtk_table_set_row_spacings(GTK_TABLE(table), 10);
-	gtk_table_set_col_spacings(GTK_TABLE(table), 15);
-	
-	da_frame = gtk_frame_new(NULL);
-	gtk_frame_set_shadow_type(GTK_FRAME(da_frame), GTK_SHADOW_IN);
-	applet->drawingarea = GTK_DRAWING_AREA(gtk_drawing_area_new());
-	gtk_widget_set_size_request(GTK_WIDGET(applet->drawingarea), -1, 180);
-	gtk_container_add(GTK_CONTAINER(da_frame), GTK_WIDGET(applet->drawingarea));
-	
-	hbox = gtk_hbox_new(FALSE, 5);
-	incolor_label = gtk_label_new_with_mnemonic(_("_In graph color"));
-	outcolor_label = gtk_label_new_with_mnemonic(_("_Out graph color"));
-	
-	incolor_sel = gtk_color_button_new ();
-	outcolor_sel = gtk_color_button_new ();
-	
-	gtk_color_button_set_color (GTK_COLOR_BUTTON (incolor_sel),  &applet->in_color);
-	gtk_color_button_set_color (GTK_COLOR_BUTTON (outcolor_sel),  &applet->out_color);
-
-	gtk_label_set_mnemonic_widget(GTK_LABEL(incolor_label), incolor_sel);
-	gtk_label_set_mnemonic_widget(GTK_LABEL(outcolor_label), outcolor_sel);
-	
-	gtk_box_pack_start(GTK_BOX(hbox), incolor_sel, FALSE, FALSE, 0);
-	gtk_box_pack_start(GTK_BOX(hbox), incolor_label, FALSE, FALSE, 0);
-	gtk_box_pack_start(GTK_BOX(hbox), outcolor_sel, FALSE, FALSE, 0);
-	gtk_box_pack_start(GTK_BOX(hbox), outcolor_label, FALSE, FALSE, 0);
-	
-	ip_label = gtk_label_new(_("Internet Address:"));
-	netmask_label = gtk_label_new(_("Netmask:"));
-	hwaddr_label = gtk_label_new(_("Hardware Address:"));
-	ptpip_label = gtk_label_new(_("P-t-P Address:"));
-	inbytes_label = gtk_label_new(_("Bytes in:"));
-	outbytes_label = gtk_label_new(_("Bytes out:"));
-	
-	ip_text = gtk_label_new(applet->devinfo.ip ? applet->devinfo.ip : _("none"));
-	netmask_text = gtk_label_new(applet->devinfo.netmask ? applet->devinfo.netmask : _("none"));
-	hwaddr_text = gtk_label_new(applet->devinfo.hwaddr ? applet->devinfo.hwaddr : _("none"));
-	ptpip_text = gtk_label_new(applet->devinfo.ptpip ? applet->devinfo.ptpip : _("none"));
-	applet->inbytes_text = gtk_label_new("0 byte");
-	applet->outbytes_text = gtk_label_new("0 byte");
-
-	gtk_label_set_selectable(GTK_LABEL(ip_text), TRUE);
-	gtk_label_set_selectable(GTK_LABEL(netmask_text), TRUE);
-	gtk_label_set_selectable(GTK_LABEL(hwaddr_text), TRUE);
-	gtk_label_set_selectable(GTK_LABEL(ptpip_text), TRUE);
-	
-	gtk_misc_set_alignment(GTK_MISC(ip_label), 0.0f, 0.5f);
-	gtk_misc_set_alignment(GTK_MISC(ip_text), 0.0f, 0.5f);
-	gtk_misc_set_alignment(GTK_MISC(netmask_label), 0.0f, 0.5f);
-	gtk_misc_set_alignment(GTK_MISC(netmask_text), 0.0f, 0.5f);
-	gtk_misc_set_alignment(GTK_MISC(hwaddr_label), 0.0f, 0.5f);
-	gtk_misc_set_alignment(GTK_MISC(hwaddr_text), 0.0f, 0.5f);
-	gtk_misc_set_alignment(GTK_MISC(ptpip_label), 0.0f, 0.5f);
-	gtk_misc_set_alignment(GTK_MISC(ptpip_text), 0.0f, 0.5f);
-	gtk_misc_set_alignment(GTK_MISC(inbytes_label), 0.0f, 0.5f);
-	gtk_misc_set_alignment(GTK_MISC(applet->inbytes_text), 0.0f, 0.5f);
-	gtk_misc_set_alignment(GTK_MISC(outbytes_label), 0.0f, 0.5f);
-	gtk_misc_set_alignment(GTK_MISC(applet->outbytes_text), 0.0f, 0.5f);
-	
-	gtk_table_attach_defaults(GTK_TABLE(table), ip_label, 0, 1, 0, 1);
-	gtk_table_attach_defaults(GTK_TABLE(table), ip_text, 1, 2, 0, 1);
-	gtk_table_attach_defaults(GTK_TABLE(table), netmask_label, 2, 3, 0, 1);
-	gtk_table_attach_defaults(GTK_TABLE(table), netmask_text, 3, 4, 0, 1);
-	gtk_table_attach_defaults(GTK_TABLE(table), hwaddr_label, 0, 1, 1, 2);
-	gtk_table_attach_defaults(GTK_TABLE(table), hwaddr_text, 1, 2, 1, 2);
-	gtk_table_attach_defaults(GTK_TABLE(table), ptpip_label, 2, 3, 1, 2);
-	gtk_table_attach_defaults(GTK_TABLE(table), ptpip_text, 3, 4, 1, 2);
-	gtk_table_attach_defaults(GTK_TABLE(table), inbytes_label, 0, 1, 2, 3);
-	gtk_table_attach_defaults(GTK_TABLE(table), applet->inbytes_text, 1, 2, 2, 3);
-	gtk_table_attach_defaults(GTK_TABLE(table), outbytes_label, 2, 3, 2, 3);
-	gtk_table_attach_defaults(GTK_TABLE(table), applet->outbytes_text, 3, 4, 2, 3);
-	
-	/* check if we got an ipv6 address */
-	if (applet->devinfo.ipv6 && (strlen (applet->devinfo.ipv6) > 2)) {
-		GtkWidget *ipv6_label, *ipv6_text;
-
-		ipv6_label = gtk_label_new (_("IPv6 Address:"));
-		ipv6_text = gtk_label_new (applet->devinfo.ipv6);
-		
-		gtk_label_set_selectable (GTK_LABEL (ipv6_text), TRUE);
-		
-		gtk_misc_set_alignment (GTK_MISC (ipv6_label), 0.0f, 0.5f);
-		gtk_misc_set_alignment (GTK_MISC (ipv6_text), 0.0f, 0.5f);
-		
-		gtk_table_attach_defaults (GTK_TABLE (table), ipv6_label, 0, 1, 3, 4);
-		gtk_table_attach_defaults (GTK_TABLE (table), ipv6_text, 1, 2, 3, 4);
-	}
-	
-	if (applet->devinfo.type == DEV_WIRELESS) {
-		GtkWidget *signal_label;
-		GtkWidget *essid_label;
-		GtkWidget *essid_text;
-		float quality;
-		char *text;
-
-		/* _maybe_ we can add the encrypted icon between the essid and the signal bar. */
-
-		applet->signalbar = gtk_progress_bar_new ();
-
-		quality = applet->devinfo.qual / 100.0f;
-		if (quality > 1.0)
-		quality = 1.0;
-
-		text = g_strdup_printf ("%d %%", applet->devinfo.qual);
-		gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (applet->signalbar), quality);
-		gtk_progress_bar_set_text (GTK_PROGRESS_BAR (applet->signalbar), text);
-		g_free(text);
-
-		signal_label = gtk_label_new (_("Signal Strength:"));
-		essid_label = gtk_label_new (_("ESSID:"));
-		essid_text = gtk_label_new (applet->devinfo.essid);
-
-		gtk_misc_set_alignment (GTK_MISC (signal_label), 0.0f, 0.5f);
-		gtk_misc_set_alignment (GTK_MISC (essid_label), 0.0f, 0.5f);
-		gtk_misc_set_alignment (GTK_MISC (essid_text), 0.0f, 0.5f);
-
-		gtk_label_set_selectable (GTK_LABEL (essid_text), TRUE);
-
-		gtk_table_attach_defaults (GTK_TABLE (table), signal_label, 2, 3, 4, 5);
-		gtk_table_attach_defaults (GTK_TABLE (table), GTK_WIDGET (applet->signalbar), 3, 4, 4, 5);
-		gtk_table_attach_defaults (GTK_TABLE (table), essid_label, 0, 3, 4, 5);
-		gtk_table_attach_defaults (GTK_TABLE (table), essid_text, 1, 4, 4, 5);
-	}
-
-	g_signal_connect(G_OBJECT(applet->drawingarea), "expose_event",
-			 GTK_SIGNAL_FUNC(da_expose_event),
-			 (gpointer)applet);
-
-	g_signal_connect(G_OBJECT(incolor_sel), "color_set", 
-			 G_CALLBACK(incolor_changed_cb),
-			 (gpointer)applet);
-	
-	g_signal_connect(G_OBJECT(outcolor_sel), "color_set",
-			 G_CALLBACK(outcolor_changed_cb),
-			 (gpointer)applet);
-
-	g_signal_connect(G_OBJECT(applet->details), "response",
-			 G_CALLBACK(info_response_cb), (gpointer)applet);
-
-	gtk_box_pack_start(GTK_BOX(box), da_frame, TRUE, TRUE, 0);
-	gtk_box_pack_start(GTK_BOX(box), hbox, FALSE, FALSE, 0);
-	gtk_box_pack_start(GTK_BOX(box), table, FALSE, FALSE, 0);
-
-	gtk_container_add(GTK_CONTAINER(GTK_DIALOG(applet->details)->vbox), box); 
-	gtk_widget_show_all(GTK_WIDGET(applet->details));
-}	
+	gtk_widget_show_all (priv->info_dialog);
+}
 
 static const BonoboUIVerb
 netspeed_applet_menu_verbs [] = 
@@ -1184,24 +770,31 @@ label_size_request_cb(GtkWidget *widget, GtkRequisition *requisition, NetspeedAp
 }	
 
 static gboolean
-applet_button_press(GtkWidget *widget, GdkEventButton *event, NetspeedApplet *applet)
+applet_button_press(GtkWidget *widget, GdkEventButton *event, gpointer user_data)
 {
+	NetspeedPrivate *priv = NETSPEED (widget)->priv;
+	char *up_cmd, *down_cmd;
+
 	if (event->button == 1)
 	{
 		GError *error = NULL;
 		
-		if (applet->connect_dialog) 
+		if (priv->connect_dialog)
 		{	
-			gtk_window_present(GTK_WINDOW(applet->connect_dialog));
+			gtk_window_present (GTK_WINDOW (priv->connect_dialog));
 			return FALSE;
 		}
 		
-		if (applet->up_cmd && applet->down_cmd)
+		g_object_get (priv->settings,
+				"ifup-command", &up_cmd,
+				"ifdown-command", &down_cmd,
+				NULL);
+		if (up_cmd && down_cmd)
 		{
 			const char *question;
 			int response;
 			
-			if (applet->devinfo.up) 
+			if (priv->stuff->devinfo.up)
 			{
 				question = _("Do you want to disconnect %s now?");
 			} 
@@ -1210,14 +803,14 @@ applet_button_press(GtkWidget *widget, GdkEventButton *event, NetspeedApplet *ap
 				question = _("Do you want to connect %s now?");
 			}
 			
-			applet->connect_dialog = gtk_message_dialog_new(NULL, 
+			priv->connect_dialog = gtk_message_dialog_new(NULL,
 					GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
 					GTK_MESSAGE_QUESTION, GTK_BUTTONS_YES_NO,
 					question,
-					applet->devinfo.name);
-			response = gtk_dialog_run(GTK_DIALOG(applet->connect_dialog));
-			gtk_widget_destroy (applet->connect_dialog);
-			applet->connect_dialog = NULL;
+					priv->stuff->devinfo.name);
+			response = gtk_dialog_run(GTK_DIALOG(priv->connect_dialog));
+			gtk_widget_destroy (priv->connect_dialog);
+			priv->connect_dialog = NULL;
 			
 			if (response == GTK_RESPONSE_YES)
 			{
@@ -1225,8 +818,8 @@ applet_button_press(GtkWidget *widget, GdkEventButton *event, NetspeedApplet *ap
 				char *command;
 				
 				command = g_strdup_printf("%s %s", 
-					applet->devinfo.up ? applet->down_cmd : applet->up_cmd,
-					applet->devinfo.name);
+					priv->stuff->devinfo.up ? down_cmd : up_cmd,
+					priv->stuff->devinfo.name);
 
 				if (!g_spawn_command_line_async(command, &error))
 				{
@@ -1243,6 +836,8 @@ applet_button_press(GtkWidget *widget, GdkEventButton *event, NetspeedApplet *ap
 				g_free(command);
 			} 
 		}	
+		g_free (up_cmd);
+		g_free (down_cmd);
 	}
 	
 	return FALSE;
@@ -1357,15 +952,6 @@ netspeed_init (Netspeed *self)
 	applet->change_icon = TRUE;
 	applet->auto_change_device = TRUE;
 
-	/* Set the default colors of the graph
-	*/
-	applet->in_color.red = 0xdf00;
-	applet->in_color.green = 0x2800;
-	applet->in_color.blue = 0x4700;
-	applet->out_color.red = 0x3700;
-	applet->out_color.green = 0x2800;
-	applet->out_color.blue = 0xdf00;
-		
 	for (i = 0; i < GRAPH_VALUES; i++)
 	{
 		applet->in_graph[i] = -1;
@@ -1422,7 +1008,7 @@ netspeed_init (Netspeed *self)
 
 	g_signal_connect(G_OBJECT(self), "button-press-event",
                            G_CALLBACK(applet_button_press),
-                           (gpointer)applet);
+                           NULL);
 
 	g_signal_connect(G_OBJECT(self), "leave_notify_event",
 			 G_CALLBACK(netspeed_leave_cb),
@@ -1464,11 +1050,6 @@ netspeed_finalize (GObject *object)
 
 	g_source_remove(priv->timeout_id);
 
-	if (applet->up_cmd)
-		g_free(applet->up_cmd);
-	if (applet->down_cmd)
-		g_free(applet->down_cmd);
-	
 	free_device_info(&applet->devinfo);
 	g_free(applet);
 
@@ -1492,7 +1073,7 @@ netspeed_factory (PanelApplet *applet, const gchar *iid, gpointer data)
 	menu_string = g_strdup_printf(netspeed_applet_menu_xml, _("Device _Details"), _("_Preferences..."), _("_Help"), _("_About..."));
 	panel_applet_setup_menu(applet, menu_string,
                             netspeed_applet_menu_verbs,
-                            (gpointer)priv->stuff);
+                            applet);
 	g_free (menu_string);
 
 	/* Get stored settings from the gconf database
@@ -1510,31 +1091,6 @@ netspeed_factory (PanelApplet *applet, const gchar *iid, gpointer data)
 		if (tmp && strcmp(tmp, "")) 
 		{
 			get_device_info(tmp, &priv->stuff->devinfo);
-			g_free(tmp);
-		}
-		tmp = panel_applet_gconf_get_string(applet, "up_command", NULL);
-		if (tmp && strcmp(tmp, "")) 
-		{
-			priv->stuff->up_cmd = g_strdup(tmp);
-			g_free(tmp);
-		}
-		tmp = panel_applet_gconf_get_string(applet, "down_command", NULL);
-		if (tmp && strcmp(tmp, "")) 
-		{
-			priv->stuff->down_cmd = g_strdup(tmp);
-			g_free(tmp);
-		}
-		
-		tmp = panel_applet_gconf_get_string(applet, "in_color", NULL);
-		if (tmp)
-		{
-			gdk_color_parse(tmp, &priv->stuff->in_color);
-			g_free(tmp);
-		}
-		tmp = panel_applet_gconf_get_string(applet, "out_color", NULL);
-		if (tmp)
-		{
-			gdk_color_parse(tmp, &priv->stuff->out_color);
 			g_free(tmp);
 		}
 	}

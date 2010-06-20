@@ -225,6 +225,7 @@ settings_dialog_init (SettingsDialog *self)
 	gtk_box_pack_start(GTK_BOX(controls_vbox), priv->change_icon_checkbutton, FALSE, FALSE, 0);
 
 	gtk_container_add(GTK_CONTAINER (GTK_DIALOG (self)->vbox), vbox);
+	gtk_widget_show_all (vbox);
 }
 
 static void
@@ -334,7 +335,8 @@ settings_dialog_finalize (GObject *object)
 	G_OBJECT_CLASS (settings_dialog_parent_class)->finalize (object);
 }
 
-GtkWidget* settings_dialog_new (Settings *settings)
+GtkWidget*
+settings_dialog_new (Settings *settings)
 {
 	return g_object_new (SETTINGS_DIALOG_TYPE,
 						"settings", settings,
