@@ -240,36 +240,35 @@ applet_change_size_or_orient(PanelApplet *applet, int arg1, gpointer user_data)
  * the panel background.
  */
 static void 
-change_background_cb(PanelApplet *applet_widget, 
+change_background_cb(PanelApplet *applet,
 				PanelAppletBackgroundType type,
 				GdkColor *color, GdkPixmap *pixmap, 
-				NetspeedApplet *applet)
+				gpointer user_data)
 {
 	GtkStyle *style;
 	GtkRcStyle *rc_style = gtk_rc_style_new ();
-	gtk_widget_set_style (GTK_WIDGET (applet_widget), NULL);
-	gtk_widget_modify_style (GTK_WIDGET (applet_widget), rc_style);
+	gtk_widget_set_style (GTK_WIDGET (applet), NULL);
+	gtk_widget_modify_style (GTK_WIDGET (applet), rc_style);
 	gtk_rc_style_unref (rc_style);
 
 	switch (type) {
 		case PANEL_PIXMAP_BACKGROUND:
-			style = gtk_style_copy (GTK_WIDGET (applet_widget)->style);
+			style = gtk_style_copy (GTK_WIDGET (applet)->style);
 			if(style->bg_pixmap[GTK_STATE_NORMAL])
 				g_object_unref (style->bg_pixmap[GTK_STATE_NORMAL]);
 			style->bg_pixmap[GTK_STATE_NORMAL] = g_object_ref (pixmap);
-			gtk_widget_set_style (GTK_WIDGET(applet_widget), style);
+			gtk_widget_set_style (GTK_WIDGET(applet), style);
 			g_object_unref (style);
 			break;
 
 		case PANEL_COLOR_BACKGROUND:
-			gtk_widget_modify_bg(GTK_WIDGET(applet_widget), GTK_STATE_NORMAL, color);
+			gtk_widget_modify_bg(GTK_WIDGET(applet), GTK_STATE_NORMAL, color);
 			break;
 
 		case PANEL_NO_BACKGROUND:
 			break;
 	}
 }
-
 
 /* Change the icons according to the selected device
  */
@@ -957,7 +956,6 @@ netspeed_init (Netspeed *self)
 	
 	/* Install shortcut */
 	self->priv = priv;
-	icon_theme = gtk_icon_theme_get_default();
 
 	gtk_widget_set_name (GTK_WIDGET(self), "PanelApplet");
 	
@@ -997,14 +995,15 @@ netspeed_init (Netspeed *self)
 	gtk_box_pack_start(GTK_BOX(spacer_box), priv->qual_pix, FALSE, FALSE, 0);
 	gtk_box_pack_start(GTK_BOX(spacer_box), priv->dev_pix, FALSE, FALSE, 0);
 
+	icon_theme = gtk_icon_theme_get_default();
 	g_signal_connect(G_OBJECT(icon_theme), "changed",
                            G_CALLBACK(icon_theme_changed_cb),
                            self);
 
 	g_signal_connect(G_OBJECT(self), "change_background",
                            G_CALLBACK(change_background_cb),
-			   (gpointer)applet);
-		       
+			   NULL);
+
 	g_signal_connect(G_OBJECT(priv->in_label), "size_request",
                            G_CALLBACK(label_size_request_cb),
                            self);
@@ -1056,7 +1055,7 @@ netspeed_finalize (GObject *object)
 
 	icon_theme = gtk_icon_theme_get_default();
 	g_object_disconnect(G_OBJECT(icon_theme), "any_signal::changed",
-						G_CALLBACK(icon_theme_changed_cb), (gpointer)priv->stuff,
+						G_CALLBACK(icon_theme_changed_cb), object,
 						NULL);
 
 	g_source_remove(priv->timeout_id);
