@@ -62,8 +62,6 @@ static const char LOGO_ICON[] = "netspeed-applet";
  * "jumping around like crazy"
  */
 #define OLD_VALUES 5
-#define GRAPH_VALUES 180
-#define GRAPH_LINES 4
 
 typedef struct _NetspeedApplet NetspeedApplet;
 
@@ -77,6 +75,24 @@ struct _NetspeedPrivate
 	GtkWidget *settings_dialog;
 	GtkWidget *info_dialog;
 	GtkWidget *connect_dialog;
+
+	GtkWidget *box;
+	GtkWidget *pix_box;
+	GtkWidget *dev_pix;
+	GtkWidget *qual_pix;
+	GtkWidget *in_box, *in_label, *in_pix;
+	GtkWidget *out_box, *out_label, *out_pix;
+	GtkWidget *sum_box, *sum_label;
+
+	GdkPixbuf *qual_pixbufs[4];
+
+	guint index_old;
+	guint64 in_old[OLD_VALUES], out_old[OLD_VALUES];
+
+	gboolean labels_dont_shrink;
+	int width;
+	
+	gboolean show_tooltip;
 };
 
 #define NETSPEED_GET_PRIVATE(o) \
@@ -97,28 +113,15 @@ G_DEFINE_TYPE (Netspeed, netspeed, PANEL_TYPE_APPLET);
 struct _NetspeedApplet
 {
 	PanelApplet *applet;
-	GtkWidget *box, *pix_box,
-	*in_box, *in_label, *in_pix,
-	*out_box, *out_label, *out_pix,
-	*sum_box, *sum_label, *dev_pix, *qual_pix;
-	GdkPixbuf *qual_pixbufs[4];
 	
 	int refresh_time;
+#if 0
 	gboolean show_sum, show_bits;
 	gboolean change_icon, auto_change_device;
-	gboolean labels_dont_shrink;
+#endif
 	
 	DevInfo devinfo;
 	gboolean device_has_changed;
-		
-	int width;
-	
-	guint index_old;
-	guint64 in_old[OLD_VALUES], out_old[OLD_VALUES];
-	double max_graph, in_graph[GRAPH_VALUES], out_graph[GRAPH_VALUES];
-	int index_graph;
-	
-	gboolean show_tooltip;
 };
 
 static const char 
@@ -137,98 +140,100 @@ netspeed_applet_menu_xml [] =
 
 
 static void
-update_tooltip(NetspeedApplet* applet);
+update_tooltip(Netspeed* applet);
 
 /* Here some rearangement of the icons and the labels occurs
  * according to the panelsize and wether we show in and out
  * or just the sum
  */
 static void
-applet_change_size_or_orient(PanelApplet *applet_widget, int arg1, NetspeedApplet *applet)
+applet_change_size_or_orient(PanelApplet *applet, int arg1, gpointer user_data)
 {
+	NetspeedPrivate *priv = NETSPEED (applet)->priv;
 	int size;
 	PanelAppletOrient orient;
-	
-	g_assert(applet);
-	
-	size = panel_applet_get_size(applet_widget);
-	orient = panel_applet_get_orient(applet_widget);
-	
-	gtk_widget_ref(applet->pix_box);
-	gtk_widget_ref(applet->in_pix);
-	gtk_widget_ref(applet->in_label);
-	gtk_widget_ref(applet->out_pix);
-	gtk_widget_ref(applet->out_label);
-	gtk_widget_ref(applet->sum_label);
+	gboolean show_sum;
 
-	if (applet->in_box) {
-		gtk_container_remove(GTK_CONTAINER(applet->in_box), applet->in_label);
-		gtk_container_remove(GTK_CONTAINER(applet->in_box), applet->in_pix);
-		gtk_widget_destroy(applet->in_box);
+	size = panel_applet_get_size(applet);
+	orient = panel_applet_get_orient(applet);
+
+	g_object_get (priv->settings, "display-sum", &show_sum, NULL);
+
+	gtk_widget_ref(priv->pix_box);
+	gtk_widget_ref(priv->in_pix);
+	gtk_widget_ref(priv->in_label);
+	gtk_widget_ref(priv->out_pix);
+	gtk_widget_ref(priv->out_label);
+	gtk_widget_ref(priv->sum_label);
+
+	if (priv->in_box) {
+		gtk_container_remove(GTK_CONTAINER(priv->in_box), priv->in_label);
+		gtk_container_remove(GTK_CONTAINER(priv->in_box), priv->in_pix);
+		gtk_widget_destroy(priv->in_box);
 	}
-	if (applet->out_box) {
-		gtk_container_remove(GTK_CONTAINER(applet->out_box), applet->out_label);
-		gtk_container_remove(GTK_CONTAINER(applet->out_box), applet->out_pix);
-		gtk_widget_destroy(applet->out_box);
+	if (priv->out_box) {
+		gtk_container_remove(GTK_CONTAINER(priv->out_box), priv->out_label);
+		gtk_container_remove(GTK_CONTAINER(priv->out_box), priv->out_pix);
+		gtk_widget_destroy(priv->out_box);
 	}
-	if (applet->sum_box) {
-		gtk_container_remove(GTK_CONTAINER(applet->sum_box), applet->sum_label);
-		gtk_widget_destroy(applet->sum_box);
+	if (priv->sum_box) {
+		gtk_container_remove(GTK_CONTAINER(priv->sum_box), priv->sum_label);
+		gtk_widget_destroy(priv->sum_box);
 	}
-	if (applet->box) {
-		gtk_container_remove(GTK_CONTAINER(applet->box), applet->pix_box);
-		gtk_widget_destroy(applet->box);
+	if (priv->box) {
+		gtk_container_remove(GTK_CONTAINER(priv->box), priv->pix_box);
+		gtk_widget_destroy(priv->box);
 	}
 		
 	if (orient == PANEL_APPLET_ORIENT_LEFT || orient == PANEL_APPLET_ORIENT_RIGHT) {
-		applet->box = gtk_vbox_new(FALSE, 0);
+		priv->box = gtk_vbox_new(FALSE, 0);
 		if (size > 64) {
-			applet->sum_box = gtk_hbox_new(FALSE, 2);
-			applet->in_box = gtk_hbox_new(FALSE, 1);
-			applet->out_box = gtk_hbox_new(FALSE, 1);
+			priv->sum_box = gtk_hbox_new(FALSE, 2);
+			priv->in_box = gtk_hbox_new(FALSE, 1);
+			priv->out_box = gtk_hbox_new(FALSE, 1);
 		} else {	
-			applet->sum_box = gtk_vbox_new(FALSE, 0);
-			applet->in_box = gtk_vbox_new(FALSE, 0);
-			applet->out_box = gtk_vbox_new(FALSE, 0);
+			priv->sum_box = gtk_vbox_new(FALSE, 0);
+			priv->in_box = gtk_vbox_new(FALSE, 0);
+			priv->out_box = gtk_vbox_new(FALSE, 0);
 		}
-		applet->labels_dont_shrink = FALSE;
+		priv->labels_dont_shrink = FALSE;
 	} else {
-		applet->in_box = gtk_hbox_new(FALSE, 1);
-		applet->out_box = gtk_hbox_new(FALSE, 1);
+		priv->in_box = gtk_hbox_new(FALSE, 1);
+		priv->out_box = gtk_hbox_new(FALSE, 1);
 		if (size < 48) {
-			applet->sum_box = gtk_hbox_new(FALSE, 2);
-			applet->box = gtk_hbox_new(FALSE, 1);
-			applet->labels_dont_shrink = TRUE;
+			priv->sum_box = gtk_hbox_new(FALSE, 2);
+			priv->box = gtk_hbox_new(FALSE, 1);
+			priv->labels_dont_shrink = TRUE;
 		} else {
-			applet->sum_box = gtk_vbox_new(FALSE, 0);
-			applet->box = gtk_vbox_new(FALSE, 0);
-			applet->labels_dont_shrink = !applet->show_sum;
+			priv->sum_box = gtk_vbox_new(FALSE, 0);
+			priv->box = gtk_vbox_new(FALSE, 0);
+			priv->labels_dont_shrink = !show_sum;
 		}
 	}		
 	
-	gtk_box_pack_start(GTK_BOX(applet->in_box), applet->in_pix, FALSE, FALSE, 0);
-	gtk_box_pack_start(GTK_BOX(applet->in_box), applet->in_label, TRUE, TRUE, 0);
-	gtk_box_pack_start(GTK_BOX(applet->out_box), applet->out_pix, FALSE, FALSE, 0);
-	gtk_box_pack_start(GTK_BOX(applet->out_box), applet->out_label, TRUE, TRUE, 0);
-	gtk_box_pack_start(GTK_BOX(applet->sum_box), applet->sum_label, TRUE, TRUE, 0);
-	gtk_box_pack_start(GTK_BOX(applet->box), applet->pix_box, FALSE, FALSE, 0);
+	gtk_box_pack_start(GTK_BOX(priv->in_box), priv->in_pix, FALSE, FALSE, 0);
+	gtk_box_pack_start(GTK_BOX(priv->in_box), priv->in_label, TRUE, TRUE, 0);
+	gtk_box_pack_start(GTK_BOX(priv->out_box), priv->out_pix, FALSE, FALSE, 0);
+	gtk_box_pack_start(GTK_BOX(priv->out_box), priv->out_label, TRUE, TRUE, 0);
+	gtk_box_pack_start(GTK_BOX(priv->sum_box), priv->sum_label, TRUE, TRUE, 0);
+	gtk_box_pack_start(GTK_BOX(priv->box), priv->pix_box, FALSE, FALSE, 0);
 	
-	gtk_widget_unref(applet->pix_box);
-	gtk_widget_unref(applet->in_pix);
-	gtk_widget_unref(applet->in_label);
-	gtk_widget_unref(applet->out_pix);
-	gtk_widget_unref(applet->out_label);
-	gtk_widget_unref(applet->sum_label);
+	gtk_widget_unref(priv->pix_box);
+	gtk_widget_unref(priv->in_pix);
+	gtk_widget_unref(priv->in_label);
+	gtk_widget_unref(priv->out_pix);
+	gtk_widget_unref(priv->out_label);
+	gtk_widget_unref(priv->sum_label);
 
-	if (applet->show_sum) {
-		gtk_box_pack_start(GTK_BOX(applet->box), applet->sum_box, TRUE, TRUE, 0);
+	if (show_sum) {
+		gtk_box_pack_start(GTK_BOX(priv->box), priv->sum_box, TRUE, TRUE, 0);
 	} else {
-		gtk_box_pack_start(GTK_BOX(applet->box), applet->in_box, TRUE, TRUE, 0);
-		gtk_box_pack_start(GTK_BOX(applet->box), applet->out_box, TRUE, TRUE, 0);
+		gtk_box_pack_start(GTK_BOX(priv->box), priv->in_box, TRUE, TRUE, 0);
+		gtk_box_pack_start(GTK_BOX(priv->box), priv->out_box, TRUE, TRUE, 0);
 	}		
 	
-	gtk_widget_show_all(applet->box);
-	gtk_container_add(GTK_CONTAINER(applet->applet), applet->box);
+	gtk_widget_show_all(priv->box);
+	gtk_container_add(GTK_CONTAINER(applet), priv->box);
 }
 
 /* Change the background of the applet according to
@@ -269,17 +274,20 @@ change_background_cb(PanelApplet *applet_widget,
 /* Change the icons according to the selected device
  */
 static void
-change_icons(NetspeedApplet *applet)
+change_icons(Netspeed *applet)
 {
+	NetspeedPrivate *priv = NETSPEED (applet)->priv;
 	GdkPixbuf *dev, *down;
 	GdkPixbuf *in_arrow, *out_arrow;
 	GtkIconTheme *icon_theme;
-	
+	gboolean change_icon;
+
 	icon_theme = gtk_icon_theme_get_default();
 	/* If the user wants a different icon then the eth0, we load it */
-	if (applet->change_icon) {
+	g_object_get (priv->settings, "display-specific-icon", &change_icon, NULL);
+	if (change_icon) {
 		dev = gtk_icon_theme_load_icon(icon_theme, 
-                        dev_type_icon[applet->devinfo.type], 16, 0, NULL);
+                        dev_type_icon[priv->stuff->devinfo.type], 16, 0, NULL);
 	} else {
         	dev = gtk_icon_theme_load_icon(icon_theme, 
 					       dev_type_icon[DEV_UNKNOWN], 
@@ -299,18 +307,18 @@ change_icons(NetspeedApplet *applet)
 	/* Set the windowmanager icon for the applet */
 	gtk_window_set_default_icon_name(LOGO_ICON);
 
-	gtk_image_set_from_pixbuf(GTK_IMAGE(applet->out_pix), out_arrow);
-	gtk_image_set_from_pixbuf(GTK_IMAGE(applet->in_pix), in_arrow);
+	gtk_image_set_from_pixbuf(GTK_IMAGE(priv->out_pix), out_arrow);
+	gtk_image_set_from_pixbuf(GTK_IMAGE(priv->in_pix), in_arrow);
 	gdk_pixbuf_unref(in_arrow);
 	gdk_pixbuf_unref(out_arrow);
 	
-	if (applet->devinfo.running) {
-		gtk_widget_show(applet->in_box);
-		gtk_widget_show(applet->out_box);
+	if (priv->stuff->devinfo.running) {
+		gtk_widget_show(priv->in_box);
+		gtk_widget_show(priv->out_box);
 	} else {
 		GdkPixbuf *copy;
-		gtk_widget_hide(applet->in_box);
-		gtk_widget_hide(applet->out_box);
+		gtk_widget_hide(priv->in_box);
+		gtk_widget_hide(priv->out_box);
 
 		/* We're not allowed to modify "dev" */
         	copy = gdk_pixbuf_copy(dev);
@@ -322,34 +330,38 @@ change_icons(NetspeedApplet *applet)
 		dev = copy;
 	}		
 
-	gtk_image_set_from_pixbuf(GTK_IMAGE(applet->dev_pix), dev);
+	gtk_image_set_from_pixbuf(GTK_IMAGE(priv->dev_pix), dev);
 	g_object_unref(dev);
 }
 
 static void
-update_quality_icon(NetspeedApplet *applet)
+update_quality_icon(Netspeed *applet)
 {
+	NetspeedPrivate *priv = applet->priv;
 	unsigned int q;
 	
-	q = (applet->devinfo.qual);
+	q = (priv->stuff->devinfo.qual);
 	q /= 25;
 	q = CLAMP(q, 0, 3); /* q out of range would crash when accessing qual_pixbufs[q] */
-	gtk_image_set_from_pixbuf (GTK_IMAGE(applet->qual_pix), applet->qual_pixbufs[q]);
+	gtk_image_set_from_pixbuf (GTK_IMAGE(priv->qual_pix), priv->qual_pixbufs[q]);
 }
 
 static void
-init_quality_pixbufs(NetspeedApplet *applet)
+init_quality_pixbufs(Netspeed *applet)
 {
+	NetspeedPrivate *priv = applet->priv;
 	GtkIconTheme *icon_theme;
 	int i;
 	
 	icon_theme = gtk_icon_theme_get_default();
 
 	for (i = 0; i < 4; i++) {
-		if (applet->qual_pixbufs[i])
-			g_object_unref(applet->qual_pixbufs[i]);
-		applet->qual_pixbufs[i] = gtk_icon_theme_load_icon(icon_theme, 
-			wireless_quality_icon[i], 24, 0, NULL);
+		if (priv->qual_pixbufs[i]) {
+			g_object_unref(priv->qual_pixbufs[i]);
+		}
+		priv->qual_pixbufs[i] =
+			gtk_icon_theme_load_icon (icon_theme,
+				wireless_quality_icon[i], 24, 0, NULL);
 	}
 }
 
@@ -357,12 +369,15 @@ init_quality_pixbufs(NetspeedApplet *applet)
 static void
 icon_theme_changed_cb(GtkIconTheme *icon_theme, gpointer user_data)
 {
-    NetspeedApplet *applet = (NetspeedApplet*)user_data;
-    init_quality_pixbufs(user_data);
-    if (applet->devinfo.type == DEV_WIRELESS && applet->devinfo.up)
-        update_quality_icon(user_data);
-    change_icons(user_data);
-}    
+	Netspeed *applet = NETSPEED (user_data);
+	NetspeedPrivate *priv = applet->priv;
+
+	init_quality_pixbufs (applet);
+	if (priv->stuff->devinfo.type == DEV_WIRELESS && priv->stuff->devinfo.up) {
+		update_quality_icon (applet);
+	}
+	change_icons (applet);
+}
 
 static gboolean
 set_applet_devinfo(NetspeedApplet* applet, const char* iface)
@@ -409,78 +424,83 @@ search_for_up_if(NetspeedApplet *applet)
 
 /* Here happens the really interesting stuff */
 static void
-update_applet(NetspeedApplet *applet)
+update_applet(Netspeed *applet)
 {
-	NetspeedPrivate *priv = NETSPEED (applet->applet)->priv;
+	NetspeedPrivate *priv = NETSPEED (applet)->priv;
 	guint64 indiff, outdiff;
 	double inrate, outrate;
 	int i;
 	DevInfo oldinfo;
-	
-	if (!applet)	return;
+	gboolean show_sum, show_bits, auto_change_device;
+
+	g_object_get (priv->settings,
+			"display-bits", &show_bits,
+			"display-sum", &show_sum,
+			"default-route", &auto_change_device,
+			NULL);
 	
 	/* First we try to figure out if the device has changed */
-	oldinfo = applet->devinfo;
-	get_device_info(oldinfo.name, &applet->devinfo);
-	if (compare_device_info(&applet->devinfo, &oldinfo))
-		applet->device_has_changed = TRUE;
+	oldinfo = priv->stuff->devinfo;
+	get_device_info(oldinfo.name, &priv->stuff->devinfo);
+	if (compare_device_info(&priv->stuff->devinfo, &oldinfo))
+		priv->stuff->device_has_changed = TRUE;
 	free_device_info(&oldinfo);
 
 	/* If the device has changed, reintialize stuff */	
-	if (applet->device_has_changed) {
+	if (priv->stuff->device_has_changed) {
 		change_icons(applet);
-		if (applet->devinfo.type == DEV_WIRELESS &&
-			applet->devinfo.up) {
-			gtk_widget_show(applet->qual_pix);
+		if (priv->stuff->devinfo.type == DEV_WIRELESS &&
+			priv->stuff->devinfo.up) {
+			gtk_widget_show(priv->qual_pix);
 		} else {
-			gtk_widget_hide(applet->qual_pix);
+			gtk_widget_hide(priv->qual_pix);
 		}	
 		for (i = 0; i < OLD_VALUES; i++)
 		{
-			applet->in_old[i] = applet->devinfo.rx;
-			applet->out_old[i] = applet->devinfo.tx;
+			priv->in_old[i] = priv->stuff->devinfo.rx;
+			priv->out_old[i] = priv->stuff->devinfo.tx;
 		}
-		for (i = 0; i < GRAPH_VALUES; i++)
-		{
-			applet->in_graph[i] = -1;
-			applet->out_graph[i] = -1;
+		if (priv->info_dialog) {
+			info_dialog_device_changed (priv->info_dialog);
 		}
-		applet->max_graph = 0;
-		applet->index_graph = 0;
-		applet->device_has_changed = FALSE;
+		priv->stuff->device_has_changed = FALSE;
 	}
 		
 	/* create the strings for the labels and tooltips */
-	if (applet->devinfo.running)
+	if (priv->stuff->devinfo.running)
 	{	
-		if (applet->devinfo.rx < applet->in_old[applet->index_old]) indiff = 0;
-		else indiff = applet->devinfo.rx - applet->in_old[applet->index_old];
-		if (applet->devinfo.tx < applet->out_old[applet->index_old]) outdiff = 0;
-		else outdiff = applet->devinfo.tx - applet->out_old[applet->index_old];
+		if (priv->stuff->devinfo.rx < priv->in_old[priv->index_old]) indiff = 0;
+		else indiff = priv->stuff->devinfo.rx - priv->in_old[priv->index_old];
+		if (priv->stuff->devinfo.tx < priv->out_old[priv->index_old]) outdiff = 0;
+		else outdiff = priv->stuff->devinfo.tx - priv->out_old[priv->index_old];
 		
 		inrate = indiff * 1000.0;
-		inrate /= (double)(applet->refresh_time * OLD_VALUES);
+		inrate /= (double)(priv->stuff->refresh_time * OLD_VALUES);
 		outrate = outdiff * 1000.0;
-		outrate /= (double)(applet->refresh_time * OLD_VALUES);
-		
-		applet->in_graph[applet->index_graph] = inrate;
-		applet->out_graph[applet->index_graph] = outrate;
-		applet->max_graph = MAX(inrate, applet->max_graph);
-		applet->max_graph = MAX(outrate, applet->max_graph);
-		
-		applet->devinfo.rx_rate = bytes_to_string(inrate, TRUE, applet->show_bits);
-		applet->devinfo.tx_rate = bytes_to_string(outrate, TRUE, applet->show_bits);
-		applet->devinfo.sum_rate = bytes_to_string(inrate + outrate, TRUE, applet->show_bits);
+		outrate /= (double)(priv->stuff->refresh_time * OLD_VALUES);
+
+#if 0
+		priv->in_graph[priv->index_graph] = inrate;
+		priv->out_graph[priv->index_graph] = outrate;
+		priv->max_graph = MAX(inrate, priv->max_graph);
+		priv->max_graph = MAX(outrate, priv->max_graph);
+#endif
+
+		priv->stuff->devinfo.rx_rate = bytes_to_string(inrate, TRUE, show_bits);
+		priv->stuff->devinfo.tx_rate = bytes_to_string(outrate, TRUE, show_bits);
+		priv->stuff->devinfo.sum_rate = bytes_to_string(inrate + outrate, TRUE, show_bits);
 	} else {
-		applet->devinfo.rx_rate = g_strdup("");
-		applet->devinfo.tx_rate = g_strdup("");
-		applet->devinfo.sum_rate = g_strdup("");
-		applet->in_graph[applet->index_graph] = 0;
-		applet->out_graph[applet->index_graph] = 0;
+		priv->stuff->devinfo.rx_rate = g_strdup("");
+		priv->stuff->devinfo.tx_rate = g_strdup("");
+		priv->stuff->devinfo.sum_rate = g_strdup("");
+#if 0
+		priv->in_graph[priv->index_graph] = 0;
+		priv->out_graph[priv->index_graph] = 0;
+#endif
 	}
 	
-	if (applet->devinfo.type == DEV_WIRELESS) {
-		if (applet->devinfo.up)
+	if (priv->stuff->devinfo.type == DEV_WIRELESS) {
+		if (priv->stuff->devinfo.up)
 			update_quality_icon(applet);
 		
 	}
@@ -492,43 +512,45 @@ update_applet(NetspeedApplet *applet)
 	update_tooltip(applet);
 
 	/* Refresh the text of the labels and tooltip */
-	if (applet->show_sum) {
-		gtk_label_set_markup(GTK_LABEL(applet->sum_label), applet->devinfo.sum_rate);
+	if (show_sum) {
+		gtk_label_set_markup(GTK_LABEL(priv->sum_label), priv->stuff->devinfo.sum_rate);
 	} else {
-		gtk_label_set_markup(GTK_LABEL(applet->in_label), applet->devinfo.rx_rate);
-		gtk_label_set_markup(GTK_LABEL(applet->out_label), applet->devinfo.tx_rate);
+		gtk_label_set_markup(GTK_LABEL(priv->in_label), priv->stuff->devinfo.rx_rate);
+		gtk_label_set_markup(GTK_LABEL(priv->out_label), priv->stuff->devinfo.tx_rate);
 	}
 
 	/* Save old values... */
-	applet->in_old[applet->index_old] = applet->devinfo.rx;
-	applet->out_old[applet->index_old] = applet->devinfo.tx;
-	applet->index_old = (applet->index_old + 1) % OLD_VALUES;
+	priv->in_old[priv->index_old] = priv->stuff->devinfo.rx;
+	priv->out_old[priv->index_old] = priv->stuff->devinfo.tx;
+	priv->index_old = (priv->index_old + 1) % OLD_VALUES;
 
+#if 0
 	/* Move the graphindex. Check if we can scale down again */
-	applet->index_graph = (applet->index_graph + 1) % GRAPH_VALUES; 
-	if (applet->index_graph % 20 == 0)
+	priv->index_graph = (priv->index_graph + 1) % GRAPH_VALUES; 
+	if (priv->index_graph % 20 == 0)
 	{
 		double max = 0;
 		for (i = 0; i < GRAPH_VALUES; i++)
 		{
-			max = MAX(max, applet->in_graph[i]);
-			max = MAX(max, applet->out_graph[i]);
+			max = MAX(max, priv->in_graph[i]);
+			max = MAX(max, priv->out_graph[i]);
 		}
-		applet->max_graph = max;
+		priv->max_graph = max;
 	}
+#endif
 
 	/* Always follow the default route */
-	if (applet->auto_change_device) {
-		gboolean change_device_now = !applet->devinfo.running;
+	if (auto_change_device) {
+		gboolean change_device_now = !priv->stuff->devinfo.running;
 		if (!change_device_now) {
 			const gchar *default_route;
 			default_route = get_default_route();
 			change_device_now = (default_route != NULL
 						&& strcmp(default_route,
-							applet->devinfo.name));
+							priv->stuff->devinfo.name));
 		}
 		if (change_device_now) {
-			search_for_up_if(applet);
+			search_for_up_if(priv->stuff);
 		}
 	}
 }
@@ -536,9 +558,9 @@ update_applet(NetspeedApplet *applet)
 static gboolean
 timeout_function(gpointer user_data)
 {
-	NetspeedApplet *applet = user_data;
+	Netspeed *applet = NETSPEED (user_data);
 	
-	update_applet(applet);
+	update_applet (applet);
 	return TRUE;
 }
 
@@ -711,13 +733,6 @@ info_response_cb (GtkDialog *dialog, gint id, gpointer data)
 	
 	gtk_widget_destroy (priv->info_dialog);
 	priv->info_dialog = NULL;
-
-#if 0
-	applet->inbytes_text = NULL;
-	applet->outbytes_text = NULL;
-	applet->drawingarea = NULL;
-	applet->signalbar = NULL;
-#endif
 }
 
 /* Creates the details dialog
@@ -759,13 +774,14 @@ netspeed_applet_menu_verbs [] =
  * "jumping around" in the panel which looks uggly
  */
 static void
-label_size_request_cb(GtkWidget *widget, GtkRequisition *requisition, NetspeedApplet *applet)
+label_size_request_cb(GtkWidget *widget, GtkRequisition *requisition, gpointer user_data)
 {
-	if (applet->labels_dont_shrink) {
-		if (requisition->width <= applet->width)
-			requisition->width = applet->width;
+	NetspeedPrivate *priv = NETSPEED (user_data)->priv;
+	if (priv->labels_dont_shrink) {
+		if (requisition->width <= priv->width)
+			requisition->width = priv->width;
 		else
-			applet->width = requisition->width;
+			priv->width = requisition->width;
 	}
 }	
 
@@ -844,58 +860,63 @@ applet_button_press(GtkWidget *widget, GdkEventButton *event, gpointer user_data
 }	
 
 static void
-update_tooltip(NetspeedApplet* applet)
+update_tooltip(Netspeed* applet)
 {
-  GString* tooltip;
+	NetspeedPrivate *priv = NETSPEED (applet)->priv;
+	GString* tooltip;
+	gboolean show_sum;
 
-  if (!applet->show_tooltip)
-    return;
+	if (!priv->show_tooltip) {
+		return;
+	}
 
-  tooltip = g_string_new("");
+	g_object_get (priv->settings, "display-sum", &show_sum, NULL);
 
-  if (!applet->devinfo.running)
-    g_string_printf(tooltip, _("%s is down"), applet->devinfo.name);
-  else {
-    if (applet->show_sum) {
-      g_string_printf(
-		      tooltip,
-		      _("%s: %s\nin: %s out: %s"),
-		      applet->devinfo.name,
-		      applet->devinfo.ip ? applet->devinfo.ip : _("has no ip"),
-		      applet->devinfo.rx_rate,
-		      applet->devinfo.tx_rate
-		      );
-    } else {
-      g_string_printf(
-		      tooltip,
-		      _("%s: %s\nsum: %s"),
-		      applet->devinfo.name,
-		      applet->devinfo.ip ? applet->devinfo.ip : _("has no ip"),
-		      applet->devinfo.sum_rate
-		      );
-    }
-    if (applet->devinfo.type == DEV_WIRELESS)
-      g_string_append_printf(
-			     tooltip,
-			     _("\nESSID: %s\nStrength: %d %%"),
-			     applet->devinfo.essid ? applet->devinfo.essid : _("unknown"),
-			     applet->devinfo.qual
-			     );
+	tooltip = g_string_new("");
+	if (!priv->stuff->devinfo.running) {
+		g_string_printf(tooltip, _("%s is down"), priv->stuff->devinfo.name);
+	} else {
+		if (show_sum) {
+			g_string_printf(
+				  tooltip,
+				  _("%s: %s\nin: %s out: %s"),
+				  priv->stuff->devinfo.name,
+				  priv->stuff->devinfo.ip ? priv->stuff->devinfo.ip : _("has no ip"),
+				  priv->stuff->devinfo.rx_rate,
+				  priv->stuff->devinfo.tx_rate
+				  );
+		} else {
+			g_string_printf(
+				  tooltip,
+				  _("%s: %s\nsum: %s"),
+				  priv->stuff->devinfo.name,
+				  priv->stuff->devinfo.ip ? priv->stuff->devinfo.ip : _("has no ip"),
+				  priv->stuff->devinfo.sum_rate
+				  );
+		}
+		if (priv->stuff->devinfo.type == DEV_WIRELESS) {
+			g_string_append_printf(
+					 tooltip,
+					 _("\nESSID: %s\nStrength: %d %%"),
+					 priv->stuff->devinfo.essid ? priv->stuff->devinfo.essid : _("unknown"),
+					 priv->stuff->devinfo.qual
+					 );
+		}
+	}
 
-  }
-
-  gtk_widget_set_tooltip_text(GTK_WIDGET(applet->applet), tooltip->str);
-  gtk_widget_trigger_tooltip_query(GTK_WIDGET(applet->applet));
-  g_string_free(tooltip, TRUE);
+	gtk_widget_set_tooltip_text(GTK_WIDGET(applet), tooltip->str);
+	gtk_widget_trigger_tooltip_query(GTK_WIDGET(applet));
+	g_string_free(tooltip, TRUE);
 }
 
 
 static gboolean
 netspeed_enter_cb(GtkWidget *widget, GdkEventCrossing *event, gpointer data)
 {
-	NetspeedApplet *applet = data;
+	Netspeed *applet = NETSPEED (data);
+	NetspeedPrivate *priv = applet->priv;
 
-	applet->show_tooltip = TRUE;
+	priv->show_tooltip = TRUE;
 	update_tooltip(applet);
 
 	return TRUE;
@@ -904,9 +925,10 @@ netspeed_enter_cb(GtkWidget *widget, GdkEventCrossing *event, gpointer data)
 static gboolean
 netspeed_leave_cb(GtkWidget *widget, GdkEventCrossing *event, gpointer data)
 {
-	NetspeedApplet *applet = data;
+	Netspeed *applet = NETSPEED (data);
+	NetspeedPrivate *priv = applet->priv;
 
-	applet->show_tooltip = FALSE;
+	priv->show_tooltip = FALSE;
 	return TRUE;
 }
 
@@ -947,64 +969,53 @@ netspeed_init (Netspeed *self)
 	priv->stuff = applet;
 	memset(&applet->devinfo, 0, sizeof(DevInfo));
 	applet->refresh_time = 1000.0;
-	applet->show_sum = FALSE;
-	applet->show_bits = FALSE;
-	applet->change_icon = TRUE;
-	applet->auto_change_device = TRUE;
 
+#if 0
 	for (i = 0; i < GRAPH_VALUES; i++)
 	{
 		applet->in_graph[i] = -1;
 		applet->out_graph[i] = -1;
 	}	
+#endif
+	priv->in_label = gtk_label_new("");
+	priv->out_label = gtk_label_new("");
+	priv->sum_label = gtk_label_new("");
 	
-	applet->in_label = gtk_label_new("");
-	applet->out_label = gtk_label_new("");
-	applet->sum_label = gtk_label_new("");
+	priv->in_pix = gtk_image_new();
+	priv->out_pix = gtk_image_new();
+	priv->dev_pix = gtk_image_new();
+	priv->qual_pix = gtk_image_new();
 	
-	applet->in_pix = gtk_image_new();
-	applet->out_pix = gtk_image_new();
-	applet->dev_pix = gtk_image_new();
-	applet->qual_pix = gtk_image_new();
-	
-	applet->pix_box = gtk_hbox_new(FALSE, 0);
+	priv->pix_box = gtk_hbox_new(FALSE, 0);
 	spacer = gtk_label_new("");
-	gtk_box_pack_start(GTK_BOX(applet->pix_box), spacer, TRUE, TRUE, 0);
+	gtk_box_pack_start(GTK_BOX(priv->pix_box), spacer, TRUE, TRUE, 0);
 	spacer = gtk_label_new("");
-	gtk_box_pack_end(GTK_BOX(applet->pix_box), spacer, TRUE, TRUE, 0);
+	gtk_box_pack_end(GTK_BOX(priv->pix_box), spacer, TRUE, TRUE, 0);
 
 	spacer_box = gtk_hbox_new(FALSE, 2);	
-	gtk_box_pack_start(GTK_BOX(applet->pix_box), spacer_box, FALSE, FALSE, 0);
-	gtk_box_pack_start(GTK_BOX(spacer_box), applet->qual_pix, FALSE, FALSE, 0);
-	gtk_box_pack_start(GTK_BOX(spacer_box), applet->dev_pix, FALSE, FALSE, 0);
-
-	g_signal_connect(G_OBJECT(self), "change_size",
-                           G_CALLBACK(applet_change_size_or_orient),
-                           (gpointer)applet);
+	gtk_box_pack_start(GTK_BOX(priv->pix_box), spacer_box, FALSE, FALSE, 0);
+	gtk_box_pack_start(GTK_BOX(spacer_box), priv->qual_pix, FALSE, FALSE, 0);
+	gtk_box_pack_start(GTK_BOX(spacer_box), priv->dev_pix, FALSE, FALSE, 0);
 
 	g_signal_connect(G_OBJECT(icon_theme), "changed",
                            G_CALLBACK(icon_theme_changed_cb),
-                           (gpointer)applet);
-
-	g_signal_connect(G_OBJECT(self), "change_orient",
-                           G_CALLBACK(applet_change_size_or_orient),
-                           (gpointer)applet);
+                           self);
 
 	g_signal_connect(G_OBJECT(self), "change_background",
                            G_CALLBACK(change_background_cb),
 			   (gpointer)applet);
 		       
-	g_signal_connect(G_OBJECT(applet->in_label), "size_request",
+	g_signal_connect(G_OBJECT(priv->in_label), "size_request",
                            G_CALLBACK(label_size_request_cb),
-                           (gpointer)applet);
+                           self);
 
-	g_signal_connect(G_OBJECT(applet->out_label), "size_request",
+	g_signal_connect(G_OBJECT(priv->out_label), "size_request",
                            G_CALLBACK(label_size_request_cb),
-                           (gpointer)applet);
+                           self);
 
-	g_signal_connect(G_OBJECT(applet->sum_label), "size_request",
+	g_signal_connect(G_OBJECT(priv->sum_label), "size_request",
                            G_CALLBACK(label_size_request_cb),
-                           (gpointer)applet);
+                           self);
 
 	g_signal_connect(G_OBJECT(self), "button-press-event",
                            G_CALLBACK(applet_button_press),
@@ -1012,11 +1023,11 @@ netspeed_init (Netspeed *self)
 
 	g_signal_connect(G_OBJECT(self), "leave_notify_event",
 			 G_CALLBACK(netspeed_leave_cb),
-			 (gpointer)applet);
+			 self);
 
 	g_signal_connect(G_OBJECT(self), "enter_notify_event",
 			 G_CALLBACK(netspeed_enter_cb),
-			 (gpointer)applet);
+			 self);
 }
 
 static void
@@ -1063,6 +1074,7 @@ netspeed_factory (PanelApplet *applet, const gchar *iid, gpointer data)
 	char* menu_string;
 	char* dummy_key, *dummy;
 	char* gconf_path;
+	char* device;
 
 	g_return_val_if_fail (IS_NETSPEED (applet), FALSE);
 	priv = NETSPEED (applet)->priv;
@@ -1076,25 +1088,6 @@ netspeed_factory (PanelApplet *applet, const gchar *iid, gpointer data)
                             applet);
 	g_free (menu_string);
 
-	/* Get stored settings from the gconf database
-	 */
-	if (panel_applet_gconf_get_bool(applet, "have_settings", NULL))
-	{	
-		char *tmp = NULL;
-		
-		priv->stuff->show_sum = panel_applet_gconf_get_bool(applet, "show_sum", NULL);
-		priv->stuff->show_bits = panel_applet_gconf_get_bool(applet, "show_bits", NULL);
-		priv->stuff->change_icon = panel_applet_gconf_get_bool(applet, "change_icon", NULL);
-		priv->stuff->auto_change_device = panel_applet_gconf_get_bool(applet, "auto_change_device", NULL);
-		
-		tmp = panel_applet_gconf_get_string(applet, "device", NULL);
-		if (tmp && strcmp(tmp, "")) 
-		{
-			get_device_info(tmp, &priv->stuff->devinfo);
-			g_free(tmp);
-		}
-	}
-
 	dummy_key = panel_applet_gconf_get_full_key (applet, "dummy");
 	dummy = dummy_key ? strstr (dummy_key, "dummy") : NULL;
 	if (dummy) {
@@ -1106,8 +1099,11 @@ netspeed_factory (PanelApplet *applet, const gchar *iid, gpointer data)
 		g_warning ("Could not figure out gconf-path from dummy-key %s", dummy_key);
 		priv->settings = settings_new ();
 	}
-
 	g_free (dummy_key);
+
+	g_object_get (priv->settings, "device", &device, NULL);
+	get_device_info(device, &priv->stuff->devinfo);
+	g_free (device);
 
 	if (!priv->stuff->devinfo.name) {
 		GList *ptr, *devices = get_available_devices();
@@ -1125,10 +1121,18 @@ netspeed_factory (PanelApplet *applet, const gchar *iid, gpointer data)
 		get_device_info("lo", &priv->stuff->devinfo);	
 	priv->stuff->device_has_changed = TRUE;	
 	
-	init_quality_pixbufs(priv->stuff);
+	init_quality_pixbufs (NETSPEED (applet));
 	
-	applet_change_size_or_orient(applet, -1, (gpointer)priv->stuff);
-	update_applet(priv->stuff);
+	g_signal_connect(G_OBJECT(applet), "change_size",
+                           G_CALLBACK(applet_change_size_or_orient),
+                           NULL);
+
+	g_signal_connect(G_OBJECT(applet), "change_orient",
+                           G_CALLBACK(applet_change_size_or_orient),
+                           NULL);
+
+	applet_change_size_or_orient(applet, -1, NULL);
+	update_applet(NETSPEED (applet));
 
 	panel_applet_set_flags(applet, PANEL_APPLET_EXPAND_MINOR);
 
@@ -1136,7 +1140,7 @@ netspeed_factory (PanelApplet *applet, const gchar *iid, gpointer data)
 
 	priv->timeout_id = g_timeout_add (priv->stuff->refresh_time,
 									timeout_function,
-									(gpointer)priv->stuff);
+									applet);
 
 	return TRUE;
 }

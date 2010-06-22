@@ -27,6 +27,9 @@
 #include "backend.h"
 #include "utils.h"
 
+#define GRAPH_VALUES 180
+#define GRAPH_LINES 4
+
 enum
 {
 	PROP_0,
@@ -42,6 +45,9 @@ struct _InfoDialogPrivate
 	GtkWidget *outbytes_text;
 	
 	DevInfo devinfo;
+
+	double max_graph, in_graph[GRAPH_VALUES], out_graph[GRAPH_VALUES];
+	int index_graph;
 
 	Settings *settings;
 	GtkWidget *incolor_selector;
@@ -465,6 +471,21 @@ info_dialog_new (Settings *settings)
 						"settings", settings,
 						"has-separator", FALSE,
 						NULL);
+}
+
+void
+info_dialog_device_changed (InfoDialog *info_dialog)
+{
+#if 0
+		for (i = 0; i < GRAPH_VALUES; i++)
+		{
+			priv->in_graph[i] = -1;
+			priv->out_graph[i] = -1;
+		}
+		priv->max_graph = 0;
+		priv->index_graph = 0;
+#endif
+
 }
 
 void
