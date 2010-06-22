@@ -83,9 +83,6 @@ device_change_cb(GtkComboBox *combo, gpointer user_data)
 						device,
 						NULL);
 	}
-
-	//applet->device_has_changed = TRUE;
-	//update_applet(applet);
 }
 
 
@@ -100,8 +97,6 @@ showsum_change_cb(GtkToggleButton *togglebutton, gpointer user_data)
 			"display-sum",
 			gtk_toggle_button_get_active (togglebutton),
 			NULL);
-	//applet_change_size_or_orient(applet->applet, -1, (gpointer)applet);
-	//change_icons(applet);
 }
 
 /* Called when the showbits checkbutton is toggled...
@@ -128,7 +123,6 @@ changeicon_change_cb(GtkToggleButton *togglebutton, gpointer user_data)
 			"display-specific-icon",
 			gtk_toggle_button_get_active (togglebutton),
 			NULL);
-	//change_icons(applet);
 }
 
 static void

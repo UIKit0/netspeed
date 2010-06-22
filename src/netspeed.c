@@ -932,6 +932,40 @@ netspeed_leave_cb(GtkWidget *widget, GdkEventCrossing *event, gpointer data)
 }
 
 static void
+settings_display_sum_changed_cb (GObject *object,
+	GParamSpec *pspec,
+	gpointer    user_data)
+{
+	Netspeed *applet = NETSPEED (user_data);
+	applet_change_size_or_orient (PANEL_APPLET (applet), -1, NULL);
+	change_icons (applet);
+}
+
+static void
+settings_display_specific_icon_changed_cb (GObject *object,
+	GParamSpec *pspec,
+	gpointer    user_data)
+{
+	Netspeed *applet = NETSPEED (user_data);
+	change_icons (applet);
+}
+
+static void
+settings_device_changed_cb (GObject *object,
+	GParamSpec *pspec,
+	gpointer    user_data)
+{
+	Netspeed *applet = NETSPEED (user_data);
+	NetspeedPrivate *priv = applet->priv;
+	char *device;
+
+	g_object_get (object, "device", &device, NULL);
+	get_device_info (device, &priv->stuff->devinfo);
+	priv->stuff->device_has_changed = TRUE;
+	update_applet (applet);
+}
+
+static void
 netspeed_class_init (NetspeedClass *klass)
 {
 	GObjectClass *object_class = G_OBJECT_CLASS (klass);
@@ -1103,6 +1137,19 @@ netspeed_factory (PanelApplet *applet, const gchar *iid, gpointer data)
 	g_object_get (priv->settings, "device", &device, NULL);
 	get_device_info(device, &priv->stuff->devinfo);
 	g_free (device);
+
+	g_signal_connect (G_OBJECT (priv->settings),
+					"notify::display-sum",
+					G_CALLBACK (settings_display_sum_changed_cb),
+					applet);
+	g_signal_connect (G_OBJECT (priv->settings),
+					"notify::display-specific-icon",
+					G_CALLBACK (settings_display_specific_icon_changed_cb),
+					applet);
+	g_signal_connect (G_OBJECT (priv->settings),
+					"notify::device",
+					G_CALLBACK (settings_device_changed_cb),
+					applet);
 
 	if (!priv->stuff->devinfo.name) {
 		GList *ptr, *devices = get_available_devices();
