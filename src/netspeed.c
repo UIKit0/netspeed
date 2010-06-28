@@ -102,9 +102,19 @@ static void netspeed_class_init (NetspeedClass *klass);
 static void netspeed_init       (Netspeed *self);
 static void netspeed_dispose    (GObject *object);
 static void netspeed_finalize   (GObject *object);
+static void netspeed_relayout   (Netspeed *applet);
+static gboolean netspeed_enter_notify_event (GtkWidget *widget, GdkEventCrossing *event);
+static gboolean netspeed_leave_notify_event (GtkWidget *widget, GdkEventCrossing *event);
+static gboolean netspeed_button_press_event (GtkWidget *widget, GdkEventButton   *event);
+static void netspeed_change_orient (PanelApplet *applet, PanelAppletOrient orient);
+static void netspeed_change_size   (PanelApplet *applet, guint size);
+static void netspeed_change_background
+		(PanelApplet *applet,
+		PanelAppletBackgroundType type,
+		GdkColor *color,
+		GdkPixmap *pixmap);
 
 G_DEFINE_TYPE (Netspeed, netspeed, PANEL_TYPE_APPLET);
-
 
 /* A struct containing all the "global" data of the 
  * applet
@@ -115,10 +125,6 @@ struct _NetspeedApplet
 	PanelApplet *applet;
 	
 	int refresh_time;
-#if 0
-	gboolean show_sum, show_bits;
-	gboolean change_icon, auto_change_device;
-#endif
 	
 	DevInfo devinfo;
 	gboolean device_has_changed;
@@ -141,134 +147,6 @@ netspeed_applet_menu_xml [] =
 
 static void
 update_tooltip(Netspeed* applet);
-
-/* Here some rearangement of the icons and the labels occurs
- * according to the panelsize and wether we show in and out
- * or just the sum
- */
-static void
-applet_change_size_or_orient(PanelApplet *applet, int arg1, gpointer user_data)
-{
-	NetspeedPrivate *priv = NETSPEED (applet)->priv;
-	int size;
-	PanelAppletOrient orient;
-	gboolean show_sum;
-
-	size = panel_applet_get_size(applet);
-	orient = panel_applet_get_orient(applet);
-
-	g_object_get (priv->settings, "display-sum", &show_sum, NULL);
-
-	gtk_widget_ref(priv->pix_box);
-	gtk_widget_ref(priv->in_pix);
-	gtk_widget_ref(priv->in_label);
-	gtk_widget_ref(priv->out_pix);
-	gtk_widget_ref(priv->out_label);
-	gtk_widget_ref(priv->sum_label);
-
-	if (priv->in_box) {
-		gtk_container_remove(GTK_CONTAINER(priv->in_box), priv->in_label);
-		gtk_container_remove(GTK_CONTAINER(priv->in_box), priv->in_pix);
-		gtk_widget_destroy(priv->in_box);
-	}
-	if (priv->out_box) {
-		gtk_container_remove(GTK_CONTAINER(priv->out_box), priv->out_label);
-		gtk_container_remove(GTK_CONTAINER(priv->out_box), priv->out_pix);
-		gtk_widget_destroy(priv->out_box);
-	}
-	if (priv->sum_box) {
-		gtk_container_remove(GTK_CONTAINER(priv->sum_box), priv->sum_label);
-		gtk_widget_destroy(priv->sum_box);
-	}
-	if (priv->box) {
-		gtk_container_remove(GTK_CONTAINER(priv->box), priv->pix_box);
-		gtk_widget_destroy(priv->box);
-	}
-		
-	if (orient == PANEL_APPLET_ORIENT_LEFT || orient == PANEL_APPLET_ORIENT_RIGHT) {
-		priv->box = gtk_vbox_new(FALSE, 0);
-		if (size > 64) {
-			priv->sum_box = gtk_hbox_new(FALSE, 2);
-			priv->in_box = gtk_hbox_new(FALSE, 1);
-			priv->out_box = gtk_hbox_new(FALSE, 1);
-		} else {	
-			priv->sum_box = gtk_vbox_new(FALSE, 0);
-			priv->in_box = gtk_vbox_new(FALSE, 0);
-			priv->out_box = gtk_vbox_new(FALSE, 0);
-		}
-		priv->labels_dont_shrink = FALSE;
-	} else {
-		priv->in_box = gtk_hbox_new(FALSE, 1);
-		priv->out_box = gtk_hbox_new(FALSE, 1);
-		if (size < 48) {
-			priv->sum_box = gtk_hbox_new(FALSE, 2);
-			priv->box = gtk_hbox_new(FALSE, 1);
-			priv->labels_dont_shrink = TRUE;
-		} else {
-			priv->sum_box = gtk_vbox_new(FALSE, 0);
-			priv->box = gtk_vbox_new(FALSE, 0);
-			priv->labels_dont_shrink = !show_sum;
-		}
-	}		
-	
-	gtk_box_pack_start(GTK_BOX(priv->in_box), priv->in_pix, FALSE, FALSE, 0);
-	gtk_box_pack_start(GTK_BOX(priv->in_box), priv->in_label, TRUE, TRUE, 0);
-	gtk_box_pack_start(GTK_BOX(priv->out_box), priv->out_pix, FALSE, FALSE, 0);
-	gtk_box_pack_start(GTK_BOX(priv->out_box), priv->out_label, TRUE, TRUE, 0);
-	gtk_box_pack_start(GTK_BOX(priv->sum_box), priv->sum_label, TRUE, TRUE, 0);
-	gtk_box_pack_start(GTK_BOX(priv->box), priv->pix_box, FALSE, FALSE, 0);
-	
-	gtk_widget_unref(priv->pix_box);
-	gtk_widget_unref(priv->in_pix);
-	gtk_widget_unref(priv->in_label);
-	gtk_widget_unref(priv->out_pix);
-	gtk_widget_unref(priv->out_label);
-	gtk_widget_unref(priv->sum_label);
-
-	if (show_sum) {
-		gtk_box_pack_start(GTK_BOX(priv->box), priv->sum_box, TRUE, TRUE, 0);
-	} else {
-		gtk_box_pack_start(GTK_BOX(priv->box), priv->in_box, TRUE, TRUE, 0);
-		gtk_box_pack_start(GTK_BOX(priv->box), priv->out_box, TRUE, TRUE, 0);
-	}		
-	
-	gtk_widget_show_all(priv->box);
-	gtk_container_add(GTK_CONTAINER(applet), priv->box);
-}
-
-/* Change the background of the applet according to
- * the panel background.
- */
-static void 
-change_background_cb(PanelApplet *applet,
-				PanelAppletBackgroundType type,
-				GdkColor *color, GdkPixmap *pixmap, 
-				gpointer user_data)
-{
-	GtkStyle *style;
-	GtkRcStyle *rc_style = gtk_rc_style_new ();
-	gtk_widget_set_style (GTK_WIDGET (applet), NULL);
-	gtk_widget_modify_style (GTK_WIDGET (applet), rc_style);
-	gtk_rc_style_unref (rc_style);
-
-	switch (type) {
-		case PANEL_PIXMAP_BACKGROUND:
-			style = gtk_style_copy (GTK_WIDGET (applet)->style);
-			if(style->bg_pixmap[GTK_STATE_NORMAL])
-				g_object_unref (style->bg_pixmap[GTK_STATE_NORMAL]);
-			style->bg_pixmap[GTK_STATE_NORMAL] = g_object_ref (pixmap);
-			gtk_widget_set_style (GTK_WIDGET(applet), style);
-			g_object_unref (style);
-			break;
-
-		case PANEL_COLOR_BACKGROUND:
-			gtk_widget_modify_bg(GTK_WIDGET(applet), GTK_STATE_NORMAL, color);
-			break;
-
-		case PANEL_NO_BACKGROUND:
-			break;
-	}
-}
 
 /* Change the icons according to the selected device
  */
@@ -363,7 +241,6 @@ init_quality_pixbufs(Netspeed *applet)
 				wireless_quality_icon[i], 24, 0, NULL);
 	}
 }
-
 
 static void
 icon_theme_changed_cb(GtkIconTheme *icon_theme, gpointer user_data)
@@ -784,80 +661,6 @@ label_size_request_cb(GtkWidget *widget, GtkRequisition *requisition, gpointer u
 	}
 }	
 
-static gboolean
-applet_button_press(GtkWidget *widget, GdkEventButton *event, gpointer user_data)
-{
-	NetspeedPrivate *priv = NETSPEED (widget)->priv;
-	char *up_cmd, *down_cmd;
-
-	if (event->button == 1)
-	{
-		GError *error = NULL;
-		
-		if (priv->connect_dialog)
-		{	
-			gtk_window_present (GTK_WINDOW (priv->connect_dialog));
-			return FALSE;
-		}
-		
-		g_object_get (priv->settings,
-				"ifup-command", &up_cmd,
-				"ifdown-command", &down_cmd,
-				NULL);
-		if (up_cmd && down_cmd)
-		{
-			const char *question;
-			int response;
-			
-			if (priv->stuff->devinfo.up)
-			{
-				question = _("Do you want to disconnect %s now?");
-			} 
-			else
-			{
-				question = _("Do you want to connect %s now?");
-			}
-			
-			priv->connect_dialog = gtk_message_dialog_new(NULL,
-					GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
-					GTK_MESSAGE_QUESTION, GTK_BUTTONS_YES_NO,
-					question,
-					priv->stuff->devinfo.name);
-			response = gtk_dialog_run(GTK_DIALOG(priv->connect_dialog));
-			gtk_widget_destroy (priv->connect_dialog);
-			priv->connect_dialog = NULL;
-			
-			if (response == GTK_RESPONSE_YES)
-			{
-				GtkWidget *dialog;
-				char *command;
-				
-				command = g_strdup_printf("%s %s", 
-					priv->stuff->devinfo.up ? down_cmd : up_cmd,
-					priv->stuff->devinfo.name);
-
-				if (!g_spawn_command_line_async(command, &error))
-				{
-					dialog = gtk_message_dialog_new_with_markup(NULL, 
-							GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
-							GTK_MESSAGE_ERROR, GTK_BUTTONS_OK,
-							_("<b>Running command %s failed</b>\n%s"),
-							command,
-							error->message);
-					gtk_dialog_run (GTK_DIALOG (dialog));
-					gtk_widget_destroy (dialog);
-					g_error_free (error);
-				}
-				g_free(command);
-			} 
-		}	
-		g_free (up_cmd);
-		g_free (down_cmd);
-	}
-	
-	return FALSE;
-}	
-
 static void
 update_tooltip(Netspeed* applet)
 {
@@ -909,35 +712,13 @@ update_tooltip(Netspeed* applet)
 }
 
 
-static gboolean
-netspeed_enter_cb(GtkWidget *widget, GdkEventCrossing *event, gpointer data)
-{
-	Netspeed *applet = NETSPEED (data);
-	NetspeedPrivate *priv = applet->priv;
-
-	priv->show_tooltip = TRUE;
-	update_tooltip(applet);
-
-	return TRUE;
-}
-
-static gboolean
-netspeed_leave_cb(GtkWidget *widget, GdkEventCrossing *event, gpointer data)
-{
-	Netspeed *applet = NETSPEED (data);
-	NetspeedPrivate *priv = applet->priv;
-
-	priv->show_tooltip = FALSE;
-	return TRUE;
-}
-
 static void
 settings_display_sum_changed_cb (GObject *object,
 	GParamSpec *pspec,
 	gpointer    user_data)
 {
 	Netspeed *applet = NETSPEED (user_data);
-	applet_change_size_or_orient (PANEL_APPLET (applet), -1, NULL);
+	netspeed_relayout (applet);
 	change_icons (applet);
 }
 
@@ -969,11 +750,19 @@ static void
 netspeed_class_init (NetspeedClass *klass)
 {
 	GObjectClass *object_class = G_OBJECT_CLASS (klass);
+	GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
+	PanelAppletClass *applet_class = PANEL_APPLET_CLASS (klass);
 
 	g_type_class_add_private (klass, sizeof (NetspeedPrivate));
 
 	object_class->dispose = netspeed_dispose;
 	object_class->finalize = netspeed_finalize;
+	widget_class->enter_notify_event = netspeed_enter_notify_event;
+	widget_class->leave_notify_event = netspeed_leave_notify_event;
+	widget_class->button_press_event = netspeed_button_press_event;
+	applet_class->change_background = netspeed_change_background;
+	applet_class->change_orient = netspeed_change_orient;
+	applet_class->change_size = netspeed_change_size;
 
 	glibtop_init();
 	g_set_application_name (_("Netspeed"));
@@ -1034,10 +823,6 @@ netspeed_init (Netspeed *self)
                            G_CALLBACK(icon_theme_changed_cb),
                            self);
 
-	g_signal_connect(G_OBJECT(self), "change_background",
-                           G_CALLBACK(change_background_cb),
-			   NULL);
-
 	g_signal_connect(G_OBJECT(priv->in_label), "size_request",
                            G_CALLBACK(label_size_request_cb),
                            self);
@@ -1049,55 +834,6 @@ netspeed_init (Netspeed *self)
 	g_signal_connect(G_OBJECT(priv->sum_label), "size_request",
                            G_CALLBACK(label_size_request_cb),
                            self);
-
-	g_signal_connect(G_OBJECT(self), "button-press-event",
-                           G_CALLBACK(applet_button_press),
-                           NULL);
-
-	g_signal_connect(G_OBJECT(self), "leave_notify_event",
-			 G_CALLBACK(netspeed_leave_cb),
-			 self);
-
-	g_signal_connect(G_OBJECT(self), "enter_notify_event",
-			 G_CALLBACK(netspeed_enter_cb),
-			 self);
-}
-
-static void
-netspeed_dispose (GObject *object)
-{
-	NetspeedPrivate *priv;
-	priv = NETSPEED (object)->priv;
-
-	if (priv->settings) {
-		g_object_unref (priv->settings);
-		priv->settings = NULL;
-	}
-
-	G_OBJECT_CLASS (netspeed_parent_class)->dispose (object);
-}
-
-static void
-netspeed_finalize (GObject *object)
-{
-	NetspeedPrivate *priv;
-	NetspeedApplet *applet;
-	GtkIconTheme *icon_theme;
-
-	priv = NETSPEED (object)->priv;
-	applet = priv->stuff;
-
-	icon_theme = gtk_icon_theme_get_default();
-	g_object_disconnect(G_OBJECT(icon_theme), "any_signal::changed",
-						G_CALLBACK(icon_theme_changed_cb), object,
-						NULL);
-
-	g_source_remove(priv->timeout_id);
-
-	free_device_info(&applet->devinfo);
-	g_free(applet);
-
-	G_OBJECT_CLASS (netspeed_parent_class)->finalize (object);
 }
 
 static gboolean
@@ -1168,16 +904,8 @@ netspeed_factory (PanelApplet *applet, const gchar *iid, gpointer data)
 	priv->stuff->device_has_changed = TRUE;	
 	
 	init_quality_pixbufs (NETSPEED (applet));
-	
-	g_signal_connect(G_OBJECT(applet), "change_size",
-                           G_CALLBACK(applet_change_size_or_orient),
-                           NULL);
 
-	g_signal_connect(G_OBJECT(applet), "change_orient",
-                           G_CALLBACK(applet_change_size_or_orient),
-                           NULL);
-
-	applet_change_size_or_orient(applet, -1, NULL);
+	netspeed_relayout (NETSPEED (applet));
 	update_applet(NETSPEED (applet));
 
 	panel_applet_set_flags(applet, PANEL_APPLET_EXPAND_MINOR);
@@ -1189,6 +917,283 @@ netspeed_factory (PanelApplet *applet, const gchar *iid, gpointer data)
 									applet);
 
 	return TRUE;
+}
+
+/* Here some rearangement of the icons and the labels occurs
+ * according to the panelsize and wether we show in and out
+ * or just the sum
+ */
+static void
+netspeed_relayout (Netspeed *applet)
+{
+	NetspeedPrivate *priv = applet->priv;
+	int size;
+	PanelAppletOrient orient;
+	gboolean show_sum;
+
+	if (!priv->settings) {
+		return;
+	}
+	size = panel_applet_get_size (PANEL_APPLET (applet));
+	orient = panel_applet_get_orient (PANEL_APPLET (applet));
+
+	g_object_get (priv->settings, "display-sum", &show_sum, NULL);
+
+	gtk_widget_ref(priv->pix_box);
+	gtk_widget_ref(priv->in_pix);
+	gtk_widget_ref(priv->in_label);
+	gtk_widget_ref(priv->out_pix);
+	gtk_widget_ref(priv->out_label);
+	gtk_widget_ref(priv->sum_label);
+
+	if (priv->in_box) {
+		gtk_container_remove(GTK_CONTAINER(priv->in_box), priv->in_label);
+		gtk_container_remove(GTK_CONTAINER(priv->in_box), priv->in_pix);
+		gtk_widget_destroy(priv->in_box);
+	}
+	if (priv->out_box) {
+		gtk_container_remove(GTK_CONTAINER(priv->out_box), priv->out_label);
+		gtk_container_remove(GTK_CONTAINER(priv->out_box), priv->out_pix);
+		gtk_widget_destroy(priv->out_box);
+	}
+	if (priv->sum_box) {
+		gtk_container_remove(GTK_CONTAINER(priv->sum_box), priv->sum_label);
+		gtk_widget_destroy(priv->sum_box);
+	}
+	if (priv->box) {
+		gtk_container_remove(GTK_CONTAINER(priv->box), priv->pix_box);
+		gtk_widget_destroy(priv->box);
+	}
+		
+	if (orient == PANEL_APPLET_ORIENT_LEFT || orient == PANEL_APPLET_ORIENT_RIGHT) {
+		priv->box = gtk_vbox_new(FALSE, 0);
+		if (size > 64) {
+			priv->sum_box = gtk_hbox_new(FALSE, 2);
+			priv->in_box = gtk_hbox_new(FALSE, 1);
+			priv->out_box = gtk_hbox_new(FALSE, 1);
+		} else {	
+			priv->sum_box = gtk_vbox_new(FALSE, 0);
+			priv->in_box = gtk_vbox_new(FALSE, 0);
+			priv->out_box = gtk_vbox_new(FALSE, 0);
+		}
+		priv->labels_dont_shrink = FALSE;
+	} else {
+		priv->in_box = gtk_hbox_new(FALSE, 1);
+		priv->out_box = gtk_hbox_new(FALSE, 1);
+		if (size < 48) {
+			priv->sum_box = gtk_hbox_new(FALSE, 2);
+			priv->box = gtk_hbox_new(FALSE, 1);
+			priv->labels_dont_shrink = TRUE;
+		} else {
+			priv->sum_box = gtk_vbox_new(FALSE, 0);
+			priv->box = gtk_vbox_new(FALSE, 0);
+			priv->labels_dont_shrink = !show_sum;
+		}
+	}		
+	
+	gtk_box_pack_start(GTK_BOX(priv->in_box), priv->in_pix, FALSE, FALSE, 0);
+	gtk_box_pack_start(GTK_BOX(priv->in_box), priv->in_label, TRUE, TRUE, 0);
+	gtk_box_pack_start(GTK_BOX(priv->out_box), priv->out_pix, FALSE, FALSE, 0);
+	gtk_box_pack_start(GTK_BOX(priv->out_box), priv->out_label, TRUE, TRUE, 0);
+	gtk_box_pack_start(GTK_BOX(priv->sum_box), priv->sum_label, TRUE, TRUE, 0);
+	gtk_box_pack_start(GTK_BOX(priv->box), priv->pix_box, FALSE, FALSE, 0);
+	
+	gtk_widget_unref(priv->pix_box);
+	gtk_widget_unref(priv->in_pix);
+	gtk_widget_unref(priv->in_label);
+	gtk_widget_unref(priv->out_pix);
+	gtk_widget_unref(priv->out_label);
+	gtk_widget_unref(priv->sum_label);
+
+	if (show_sum) {
+		gtk_box_pack_start(GTK_BOX(priv->box), priv->sum_box, TRUE, TRUE, 0);
+	} else {
+		gtk_box_pack_start(GTK_BOX(priv->box), priv->in_box, TRUE, TRUE, 0);
+		gtk_box_pack_start(GTK_BOX(priv->box), priv->out_box, TRUE, TRUE, 0);
+	}		
+	
+	gtk_widget_show_all(priv->box);
+	gtk_container_add(GTK_CONTAINER(applet), priv->box);
+}
+
+static gboolean
+netspeed_button_press_event (GtkWidget *widget, GdkEventButton *event)
+{
+	NetspeedPrivate *priv = NETSPEED (widget)->priv;
+	char *up_cmd, *down_cmd;
+
+	if (event->button == 1)
+	{
+		GError *error = NULL;
+		
+		if (priv->connect_dialog)
+		{	
+			gtk_window_present (GTK_WINDOW (priv->connect_dialog));
+			return FALSE;
+		}
+		
+		g_object_get (priv->settings,
+				"ifup-command", &up_cmd,
+				"ifdown-command", &down_cmd,
+				NULL);
+		if (up_cmd && down_cmd)
+		{
+			const char *question;
+			int response;
+			
+			if (priv->stuff->devinfo.up)
+			{
+				question = _("Do you want to disconnect %s now?");
+			} 
+			else
+			{
+				question = _("Do you want to connect %s now?");
+			}
+			
+			priv->connect_dialog = gtk_message_dialog_new(NULL,
+					GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+					GTK_MESSAGE_QUESTION, GTK_BUTTONS_YES_NO,
+					question,
+					priv->stuff->devinfo.name);
+			response = gtk_dialog_run(GTK_DIALOG(priv->connect_dialog));
+			gtk_widget_destroy (priv->connect_dialog);
+			priv->connect_dialog = NULL;
+			
+			if (response == GTK_RESPONSE_YES)
+			{
+				GtkWidget *dialog;
+				char *command;
+				
+				command = g_strdup_printf("%s %s", 
+					priv->stuff->devinfo.up ? down_cmd : up_cmd,
+					priv->stuff->devinfo.name);
+
+				if (!g_spawn_command_line_async(command, &error))
+				{
+					dialog = gtk_message_dialog_new_with_markup(NULL, 
+							GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+							GTK_MESSAGE_ERROR, GTK_BUTTONS_OK,
+							_("<b>Running command %s failed</b>\n%s"),
+							command,
+							error->message);
+					gtk_dialog_run (GTK_DIALOG (dialog));
+					gtk_widget_destroy (dialog);
+					g_error_free (error);
+				}
+				g_free(command);
+			} 
+		}	
+		g_free (up_cmd);
+		g_free (down_cmd);
+	}
+	
+	return GTK_WIDGET_CLASS (netspeed_parent_class)->button_press_event (widget, event);
+}
+
+static gboolean
+netspeed_enter_notify_event (GtkWidget *widget, GdkEventCrossing *event)
+{
+	Netspeed *applet = NETSPEED (widget);
+	NetspeedPrivate *priv = applet->priv;
+
+	priv->show_tooltip = TRUE;
+	update_tooltip(applet);
+
+	return TRUE;
+}
+
+static gboolean
+netspeed_leave_notify_event (GtkWidget *widget, GdkEventCrossing *event)
+{
+	Netspeed *applet = NETSPEED (widget);
+	NetspeedPrivate *priv = applet->priv;
+
+	priv->show_tooltip = FALSE;
+	
+	return TRUE;
+}
+
+/* Change the background of the applet according to
+ * the panel background.
+ */
+static void 
+netspeed_change_background (PanelApplet *applet,
+		PanelAppletBackgroundType type,
+		GdkColor *color,
+		GdkPixmap *pixmap)
+{
+	GtkStyle *style;
+	GtkRcStyle *rc_style = gtk_rc_style_new ();
+	gtk_widget_set_style (GTK_WIDGET (applet), NULL);
+	gtk_widget_modify_style (GTK_WIDGET (applet), rc_style);
+	gtk_rc_style_unref (rc_style);
+
+	switch (type) {
+		case PANEL_PIXMAP_BACKGROUND:
+			style = gtk_style_copy (GTK_WIDGET (applet)->style);
+			if(style->bg_pixmap[GTK_STATE_NORMAL])
+				g_object_unref (style->bg_pixmap[GTK_STATE_NORMAL]);
+			style->bg_pixmap[GTK_STATE_NORMAL] = g_object_ref (pixmap);
+			gtk_widget_set_style (GTK_WIDGET(applet), style);
+			g_object_unref (style);
+			break;
+
+		case PANEL_COLOR_BACKGROUND:
+			gtk_widget_modify_bg(GTK_WIDGET(applet), GTK_STATE_NORMAL, color);
+			break;
+
+		case PANEL_NO_BACKGROUND:
+			break;
+	}
+}
+
+static void
+netspeed_change_orient (PanelApplet *applet, PanelAppletOrient orient)
+{
+	netspeed_relayout (NETSPEED (applet));
+}
+
+static void
+netspeed_change_size (PanelApplet *applet, guint size)
+{
+	netspeed_relayout (NETSPEED (applet));
+}
+
+static void
+netspeed_dispose (GObject *object)
+{
+	NetspeedPrivate *priv;
+	priv = NETSPEED (object)->priv;
+
+	if (priv->settings) {
+		g_object_unref (priv->settings);
+		priv->settings = NULL;
+	}
+
+	G_OBJECT_CLASS (netspeed_parent_class)->dispose (object);
+}
+
+static void
+netspeed_finalize (GObject *object)
+{
+	NetspeedPrivate *priv;
+	NetspeedApplet *applet;
+	GtkIconTheme *icon_theme;
+
+	priv = NETSPEED (object)->priv;
+	applet = priv->stuff;
+
+	icon_theme = gtk_icon_theme_get_default();
+	g_object_disconnect(G_OBJECT(icon_theme), "any_signal::changed",
+						G_CALLBACK(icon_theme_changed_cb), object,
+						NULL);
+
+	g_source_remove(priv->timeout_id);
+
+	free_device_info(&applet->devinfo);
+	g_free(applet);
+
+	G_OBJECT_CLASS (netspeed_parent_class)->finalize (object);
 }
 
 PANEL_APPLET_BONOBO_FACTORY("OAFIID:GNOME_NetspeedApplet_Factory",
