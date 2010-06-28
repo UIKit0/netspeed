@@ -1,0 +1,11 @@
+<Root>
+  <popups>
+    <popup name="button3">
+    <menuitem name="Details Item" verb="NetspeedAppletDetails" _label="Device _Details" pixtype="stock" pixname="gtk-info"/>
+    <separator/>
+    <menuitem name="Properties Item" verb="NetspeedAppletProperties" _label="_Preferences..." pixtype="stock" pixname="gtk-properties"/>
+    <menuitem name="Help Item" verb="NetspeedAppletHelp" _label="_Help" pixtype="stock" pixname="gtk-help"/>
+    <menuitem name="About Item" verb="NetspeedAppletAbout" _label="_About..." pixtype="stock" pixname="gtk-about"/>
+    </popup>
+  </popups>
+</Root>

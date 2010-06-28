@@ -1,3 +1,5 @@
-GNOME_NetspeedApplet.server.in.in
+data/menu.xml
+data/GNOME_NetspeedApplet.server.in.in
 src/netspeed.c
-
+src/info-dialog.c
+src/settings-dialog.c

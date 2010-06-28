@@ -64,4 +64,5 @@ icons/scalable/apps/Makefile
 src/Makefile
 po/Makefile.in
 help/Makefile
+data/Makefile
 ])

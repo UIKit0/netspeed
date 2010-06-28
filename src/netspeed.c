@@ -135,21 +135,6 @@ struct _NetspeedApplet
 	gboolean device_has_changed;
 };
 
-static const char 
-netspeed_applet_menu_xml [] =
-	"<popup name=\"button3\">\n"
-	"   <menuitem name=\"Properties Item\" verb=\"NetspeedAppletDetails\" label=\"%s\"\n"
-	"             pixtype=\"stock\" pixname=\"gtk-info\"/>\n"
-	"   <separator/>\n"
-	"   <menuitem name=\"Properties Item\" verb=\"NetspeedAppletProperties\" label=\"%s\"\n"
-	"             pixtype=\"stock\" pixname=\"gtk-properties\"/>\n"
-	"   <menuitem name=\"Help Item\" verb=\"NetspeedAppletHelp\" label=\"%s\"\n"
-	"             pixtype=\"stock\" pixname=\"gtk-help\"/>\n"
-	"   <menuitem name=\"About Item\" verb=\"NetspeedAppletAbout\" label=\"%s\"\n"
-	"             pixtype=\"stock\" pixname=\"gtk-about\"/>\n"
-	"</popup>\n";
-
-
 static void
 update_tooltip(Netspeed* applet);
 
@@ -642,7 +627,6 @@ static gboolean
 netspeed_factory (PanelApplet *applet, const gchar *iid, gpointer data)
 {
 	NetspeedPrivate *priv;
-	char* menu_string;
 	char* dummy_key, *dummy;
 	char* gconf_path;
 	char* device;
@@ -660,11 +644,11 @@ netspeed_factory (PanelApplet *applet, const gchar *iid, gpointer data)
 	if (strcmp (iid, "OAFIID:GNOME_NetspeedApplet"))
 		return FALSE;
 
-	menu_string = g_strdup_printf(netspeed_applet_menu_xml, _("Device _Details"), _("_Preferences..."), _("_Help"), _("_About..."));
-	panel_applet_setup_menu(applet, menu_string,
-                            netspeed_applet_menu_verbs,
-                            applet);
-	g_free (menu_string);
+	panel_applet_setup_menu_from_file (applet,
+			DATADIR"/netspeed/",
+			"menu.xml", NULL,
+			netspeed_applet_menu_verbs,
+			applet);
 
 	dummy_key = panel_applet_gconf_get_full_key (applet, "dummy");
 	dummy = dummy_key ? strstr (dummy_key, "dummy") : NULL;
