@@ -113,6 +113,11 @@ static void netspeed_change_background
 		PanelAppletBackgroundType type,
 		GdkColor *color,
 		GdkPixmap *pixmap);
+static void netspeed_menu_show_help (BonoboUIComponent *uic, gpointer data, const gchar *verbname);
+static void netspeed_menu_show_about (BonoboUIComponent *uic, gpointer data, const gchar *verbname);
+static void netspeed_menu_show_settings_dialog (BonoboUIComponent *uic, gpointer data, const gchar *verbname);
+static void netspeed_menu_show_info_dialog (BonoboUIComponent *uic, gpointer data, const gchar *verbname);
+static void netspeed_display_help_section (GtkWidget *parent, const gchar *section);
 
 G_DEFINE_TYPE (Netspeed, netspeed, PANEL_TYPE_APPLET);
 
@@ -440,209 +445,6 @@ timeout_function(gpointer user_data)
 	return TRUE;
 }
 
-/* Display a section of netspeed help
- */
-static void
-display_help (GtkWidget *dialog, const gchar *section)
-{
-	GError *error = NULL;
-	gboolean ret;
-	char *uri;
-
-	if (section)
-		uri = g_strdup_printf ("ghelp:netspeed_applet?%s", section);
-	else
-		uri = g_strdup ("ghelp:netspeed_applet");
-
-	ret = open_uri (dialog, uri, &error);
-	g_free (uri);
-	if (ret == FALSE) {
-		GtkWidget *error_dialog = gtk_message_dialog_new (NULL,
-								  GTK_DIALOG_MODAL,
-								  GTK_MESSAGE_ERROR,
-								  GTK_BUTTONS_OK,
-								  _("There was an error displaying help:\n%s"),
-								  error->message);
-		g_signal_connect (error_dialog, "response",
-				  G_CALLBACK (gtk_widget_destroy), NULL);
-	       
-		gtk_window_set_resizable (GTK_WINDOW (error_dialog), FALSE);
-		gtk_window_set_screen  (GTK_WINDOW (error_dialog), gtk_widget_get_screen (dialog));
-		gtk_widget_show (error_dialog);
-		g_error_free (error);
-	}
-}
-
-/* Opens gnome help application
- */
-static void
-help_cb (BonoboUIComponent *uic, gpointer data, const gchar *verbname)
-{
-	Netspeed *applet = NETSPEED (data);
-
-	display_help (GTK_WIDGET (applet), NULL);
-}
-
-enum {
-	LINK_TYPE_EMAIL,
-	LINK_TYPE_URL
-};
-
-/* handle the links of the about dialog */
-static void
-handle_links (GtkAboutDialog *about, const gchar *link, gpointer data)
-{
-	gchar *new_link;
-	GError *error = NULL;
-	gboolean ret;
-	GtkWidget *dialog;
-
-	switch (GPOINTER_TO_INT (data)){
-	case LINK_TYPE_EMAIL:
-		new_link = g_strdup_printf ("mailto:%s", link);
-		break;
-	case LINK_TYPE_URL:
-		new_link = g_strdup (link);
-		break;
-	default:
-		g_assert_not_reached ();
-	}
-
-	ret = open_uri (GTK_WIDGET (about), new_link, &error);
-
-	if (ret == FALSE) {
-    		dialog = gtk_message_dialog_new (GTK_WINDOW (dialog), 
-						 GTK_DIALOG_DESTROY_WITH_PARENT, 
-						 GTK_MESSAGE_ERROR, GTK_BUTTONS_OK, 
-				                 _("Failed to show:\n%s"), new_link); 
-    		gtk_dialog_run (GTK_DIALOG (dialog));
-    		gtk_widget_destroy (dialog);
-		g_error_free(error);
-	}
-	g_free (new_link);
-}
-
-/* Just the about window... If it's already open, just fokus it
- */
-static void
-about_cb(BonoboUIComponent *uic, gpointer data, const gchar *verbname)
-{
-	const char *authors[] = 
-	{
-		"Jörgen Scheibengruber <mfcn@gmx.de>", 
-		"Dennis Cranston <dennis_cranston@yahoo.com>",
-		"Pedro Villavicencio Garrido <pvillavi@gnome.org>",
-		"Benoît Dejean <benoit@placenet.org>",
-		NULL
-	};
-    
-	gtk_about_dialog_set_email_hook ((GtkAboutDialogActivateLinkFunc) handle_links,
-					 GINT_TO_POINTER (LINK_TYPE_EMAIL), NULL);
-	
-	gtk_about_dialog_set_url_hook ((GtkAboutDialogActivateLinkFunc) handle_links,
-				       GINT_TO_POINTER (LINK_TYPE_URL), NULL);
-	
-	gtk_show_about_dialog (NULL, 
-			       "version", VERSION, 
-			       "copyright", "Copyright 2002 - 2010 Jörgen Scheibengruber",
-			       "comments", _("A little applet that displays some information on the traffic on the specified network device"),
-			       "authors", authors, 
-			       "documenters", NULL, 
-			       "translator-credits", _("translator-credits"),
-			       "website", "http://www.gnome.org/projects/netspeed/",
-			       "website-label", _("Netspeed Website"),
-			       "logo-icon-name", LOGO_ICON,
-			       NULL);
-	
-}
-
-/* Handle preference dialog response event
- */
-static void
-pref_response_cb (GtkDialog *dialog, gint id, gpointer data)
-{
-	NetspeedPrivate *priv = NETSPEED (data)->priv;
-
-    if (id == GTK_RESPONSE_HELP) {
-		display_help (GTK_WIDGET (dialog), "netspeed_applet-settings");
-		return;
-	}
-
-	gtk_widget_destroy (priv->settings_dialog);
-	priv->settings_dialog = NULL;
-}
-
-
-/* Creates the settings dialog
- * After its been closed, take the new values and store
- * them in the gconf database
- */
-static void
-settings_cb(BonoboUIComponent *uic, gpointer data, const gchar *verbname)
-{
-	Netspeed *applet = NETSPEED (data);
-	NetspeedPrivate *priv = applet->priv;
-
-	if (priv->settings_dialog)
-	{
-		gtk_window_present(GTK_WINDOW(priv->settings_dialog));
-		return;
-	}
-	priv->settings_dialog = settings_dialog_new (priv->settings);
-	g_signal_connect (G_OBJECT (priv->settings_dialog), "response",
-			 G_CALLBACK (pref_response_cb), applet);
-
-	gtk_widget_show_all (priv->settings_dialog);
-}
-
-/* Handle info dialog response event
- */
-static void
-info_response_cb (GtkDialog *dialog, gint id, gpointer data)
-{
-	NetspeedPrivate *priv = NETSPEED (data)->priv;
-
-	if (id == GTK_RESPONSE_HELP){
-		display_help (GTK_WIDGET (dialog), "netspeed_applet-details");
-		return;
-	}
-	
-	gtk_widget_destroy (priv->info_dialog);
-	priv->info_dialog = NULL;
-}
-
-/* Creates the details dialog
- */
-static void
-showinfo_cb(BonoboUIComponent *uic, gpointer data, const gchar *verbname)
-{
-	Netspeed *applet = NETSPEED (data);
-	NetspeedPrivate *priv = applet->priv;
-	
-	if (priv->info_dialog)
-	{
-		gtk_window_present (GTK_WINDOW (priv->info_dialog));
-		return;
-	}
-	
-	priv->info_dialog = info_dialog_new (priv->settings);
-	g_signal_connect (G_OBJECT (priv->info_dialog), "response",
-			 G_CALLBACK (info_response_cb), applet);
-
-	gtk_widget_show_all (priv->info_dialog);
-}
-
-static const BonoboUIVerb
-netspeed_applet_menu_verbs [] = 
-{
-		BONOBO_UI_VERB("NetspeedAppletDetails", showinfo_cb),
-		BONOBO_UI_VERB("NetspeedAppletProperties", settings_cb),
-		BONOBO_UI_UNSAFE_VERB("NetspeedAppletHelp", help_cb),
-		BONOBO_UI_VERB("NetspeedAppletAbout", about_cb),
-	
-		BONOBO_UI_VERB_END
-};
-
 /* Block the size_request signal emit by the label if the
  * text changes. Only if the label wants to grow, we give
  * permission. This will eventually result in the maximal
@@ -844,6 +646,13 @@ netspeed_factory (PanelApplet *applet, const gchar *iid, gpointer data)
 	char* dummy_key, *dummy;
 	char* gconf_path;
 	char* device;
+	static const BonoboUIVerb netspeed_applet_menu_verbs[] = {
+		BONOBO_UI_VERB("NetspeedAppletDetails", netspeed_menu_show_info_dialog),
+		BONOBO_UI_VERB("NetspeedAppletProperties", netspeed_menu_show_settings_dialog),
+		BONOBO_UI_UNSAFE_VERB("NetspeedAppletHelp", netspeed_menu_show_help),
+		BONOBO_UI_VERB("NetspeedAppletAbout", netspeed_menu_show_about),
+		BONOBO_UI_VERB_END
+	};
 
 	g_return_val_if_fail (IS_NETSPEED (applet), FALSE);
 	priv = NETSPEED (applet)->priv;
@@ -1158,6 +967,199 @@ netspeed_change_size (PanelApplet *applet, guint size)
 {
 	netspeed_relayout (NETSPEED (applet));
 }
+
+/* Handle preference dialog response event
+ */
+static void
+settings_dialog_response_cb (GtkDialog *dialog, gint id, gpointer data)
+{
+	NetspeedPrivate *priv = NETSPEED (data)->priv;
+
+    if (id == GTK_RESPONSE_HELP) {
+		netspeed_display_help_section (GTK_WIDGET (dialog), "netspeed_applet-settings");
+		return;
+	}
+
+	gtk_widget_destroy (priv->settings_dialog);
+	priv->settings_dialog = NULL;
+}
+
+
+/* Creates the settings dialog
+ * After its been closed, take the new values and store
+ * them in the gconf database
+ */
+static void
+netspeed_menu_show_settings_dialog (BonoboUIComponent *uic, gpointer data, const gchar *verbname)
+{
+	Netspeed *applet = NETSPEED (data);
+	NetspeedPrivate *priv = applet->priv;
+
+	if (priv->settings_dialog)
+	{
+		gtk_window_present(GTK_WINDOW(priv->settings_dialog));
+		return;
+	}
+	priv->settings_dialog = settings_dialog_new (priv->settings);
+	g_signal_connect (G_OBJECT (priv->settings_dialog), "response",
+			 G_CALLBACK (settings_dialog_response_cb), applet);
+
+	gtk_widget_show_all (priv->settings_dialog);
+}
+
+/* Handle info dialog response event
+ */
+static void
+info_dialog_response_cb (GtkDialog *dialog, gint id, gpointer data)
+{
+	NetspeedPrivate *priv = NETSPEED (data)->priv;
+
+	if (id == GTK_RESPONSE_HELP){
+		netspeed_display_help_section (GTK_WIDGET (dialog), "netspeed_applet-details");
+		return;
+	}
+	
+	gtk_widget_destroy (priv->info_dialog);
+	priv->info_dialog = NULL;
+}
+
+/* Creates the details dialog
+ */
+static void
+netspeed_menu_show_info_dialog (BonoboUIComponent *uic, gpointer data, const gchar *verbname)
+{
+	Netspeed *applet = NETSPEED (data);
+	NetspeedPrivate *priv = applet->priv;
+	
+	if (priv->info_dialog)
+	{
+		gtk_window_present (GTK_WINDOW (priv->info_dialog));
+		return;
+	}
+	
+	priv->info_dialog = info_dialog_new (priv->settings);
+	g_signal_connect (G_OBJECT (priv->info_dialog), "response",
+			 G_CALLBACK (info_dialog_response_cb), applet);
+
+	gtk_widget_show_all (priv->info_dialog);
+}
+
+
+enum {
+	LINK_TYPE_EMAIL,
+	LINK_TYPE_URL
+};
+
+/* handle the links of the about dialog */
+static void
+handle_links (GtkAboutDialog *about, const gchar *link, gpointer data)
+{
+	gchar *new_link;
+	GError *error = NULL;
+	gboolean ret;
+	GtkWidget *dialog;
+
+	switch (GPOINTER_TO_INT (data)){
+	case LINK_TYPE_EMAIL:
+		new_link = g_strdup_printf ("mailto:%s", link);
+		break;
+	case LINK_TYPE_URL:
+		new_link = g_strdup (link);
+		break;
+	default:
+		g_assert_not_reached ();
+	}
+
+	ret = open_uri (GTK_WIDGET (about), new_link, &error);
+
+	if (ret == FALSE) {
+    		dialog = gtk_message_dialog_new (GTK_WINDOW (dialog), 
+						 GTK_DIALOG_DESTROY_WITH_PARENT, 
+						 GTK_MESSAGE_ERROR, GTK_BUTTONS_OK, 
+				                 _("Failed to show:\n%s"), new_link); 
+    		gtk_dialog_run (GTK_DIALOG (dialog));
+    		gtk_widget_destroy (dialog);
+		g_error_free(error);
+	}
+	g_free (new_link);
+}
+
+/* Just the about window... If it's already open, just fokus it
+ */
+static void
+netspeed_menu_show_about (BonoboUIComponent *uic, gpointer data, const gchar *verbname)
+{
+	const char *authors[] = 
+	{
+		"Jörgen Scheibengruber <mfcn@gmx.de>", 
+		"Dennis Cranston <dennis_cranston@yahoo.com>",
+		"Pedro Villavicencio Garrido <pvillavi@gnome.org>",
+		"Benoît Dejean <benoit@placenet.org>",
+		NULL
+	};
+
+	gtk_about_dialog_set_email_hook ((GtkAboutDialogActivateLinkFunc) handle_links,
+					 GINT_TO_POINTER (LINK_TYPE_EMAIL), NULL);
+	
+	gtk_about_dialog_set_url_hook ((GtkAboutDialogActivateLinkFunc) handle_links,
+				       GINT_TO_POINTER (LINK_TYPE_URL), NULL);
+	
+	gtk_show_about_dialog (NULL, 
+			       "version", VERSION, 
+			       "copyright", "Copyright 2002 - 2010 Jörgen Scheibengruber",
+			       "comments", _("A little applet that displays some information on the traffic on the specified network device"),
+			       "authors", authors, 
+			       "documenters", NULL, 
+			       "translator-credits", _("translator-credits"),
+			       "website", "http://www.gnome.org/projects/netspeed/",
+			       "website-label", _("Netspeed Website"),
+			       "logo-icon-name", LOGO_ICON,
+			       NULL);
+}
+
+/* Opens gnome help application
+ */
+static void
+netspeed_menu_show_help (BonoboUIComponent *uic, gpointer data, const gchar *verbname)
+{
+	Netspeed *applet = NETSPEED (data);
+
+	netspeed_display_help_section (GTK_WIDGET (applet), NULL);
+}
+
+/* Display a section of netspeed help
+ */
+static void
+netspeed_display_help_section (GtkWidget *parent, const gchar *section)
+{
+	GError *error = NULL;
+	gboolean ret;
+	char *uri;
+
+	if (section)
+		uri = g_strdup_printf ("ghelp:netspeed_applet?%s", section);
+	else
+		uri = g_strdup ("ghelp:netspeed_applet");
+
+	ret = open_uri (parent, uri, &error);
+	g_free (uri);
+	if (ret == FALSE) {
+		GtkWidget *error_dialog = gtk_message_dialog_new (GTK_WINDOW (parent),
+								  GTK_DIALOG_MODAL,
+								  GTK_MESSAGE_ERROR,
+								  GTK_BUTTONS_OK,
+								  _("There was an error displaying help:\n%s"),
+								  error->message);
+		g_signal_connect (error_dialog, "response",
+				  G_CALLBACK (gtk_widget_destroy), NULL);
+	       
+		gtk_window_set_resizable (GTK_WINDOW (error_dialog), FALSE);
+		gtk_window_set_screen  (GTK_WINDOW (error_dialog), gtk_widget_get_screen (parent));
+		gtk_widget_show (error_dialog);
+		g_error_free (error);
+	}
+}
+
 
 static void
 netspeed_dispose (GObject *object)
