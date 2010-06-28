@@ -627,7 +627,6 @@ static gboolean
 netspeed_factory (PanelApplet *applet, const gchar *iid, gpointer data)
 {
 	NetspeedPrivate *priv;
-	char* dummy_key, *dummy;
 	char* gconf_path;
 	char* device;
 	static const BonoboUIVerb netspeed_applet_menu_verbs[] = {
@@ -650,18 +649,9 @@ netspeed_factory (PanelApplet *applet, const gchar *iid, gpointer data)
 			netspeed_applet_menu_verbs,
 			applet);
 
-	dummy_key = panel_applet_gconf_get_full_key (applet, "dummy");
-	dummy = dummy_key ? strstr (dummy_key, "dummy") : NULL;
-	if (dummy) {
-		dummy[0] = 0;
-		gconf_path = dummy_key;
-		priv->settings = settings_new_with_gconf_path (gconf_path);
-	} else {
-		gconf_path = NULL;
-		g_warning ("Could not figure out gconf-path from dummy-key %s", dummy_key);
-		priv->settings = settings_new ();
-	}
-	g_free (dummy_key);
+	gconf_path = panel_applet_get_preferences_key (applet);
+	priv->settings = settings_new_with_gconf_path (gconf_path);
+	g_free (gconf_path);
 
 	g_object_get (priv->settings, "device", &device, NULL);
 	get_device_info(device, &priv->stuff->devinfo);
