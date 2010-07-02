@@ -30,11 +30,11 @@
 #include "settings.h"
 #include "settings-dialog.h"
 #include "info-dialog.h"
-#include "backend.h"
+#include "network-device.h"
 #include "utils.h"
 
 /* Icons for the interfaces */
-static const char* const dev_type_icon[DEV_UNKNOWN + 1] = {
+static const char* const dev_type_icon[NETWORK_DEVICE_TYPE_UNKNOWN + 1] = {
 	"netspeed-loopback",         /* DEV_LO */
 	"network-wired",             /* DEV_ETHERNET */
 	"network-wireless",          /* DEV_WIRELESS */
@@ -63,14 +63,11 @@ static const char LOGO_ICON[] = "netspeed-applet";
  */
 #define OLD_VALUES 5
 
-typedef struct _NetspeedApplet NetspeedApplet;
-
 struct _NetspeedPrivate
 {
-	NetspeedApplet *stuff;
-
 	Settings *settings;
-	guint timeout_id;
+
+	NetworkDevice *device;
 
 	GtkWidget *settings_dialog;
 	GtkWidget *info_dialog;
@@ -118,22 +115,9 @@ static void netspeed_menu_show_about (BonoboUIComponent *uic, gpointer data, con
 static void netspeed_menu_show_settings_dialog (BonoboUIComponent *uic, gpointer data, const gchar *verbname);
 static void netspeed_menu_show_info_dialog (BonoboUIComponent *uic, gpointer data, const gchar *verbname);
 static void netspeed_display_help_section (GtkWidget *parent, const gchar *section);
+static void netspeed_set_network_device (Netspeed *netspeed, NetworkDevice *device);
 
 G_DEFINE_TYPE (Netspeed, netspeed, PANEL_TYPE_APPLET);
-
-/* A struct containing all the "global" data of the 
- * applet
- * FIXME: This is old stuff and should be moved into NetspeedPrivate
- */
-struct _NetspeedApplet
-{
-	PanelApplet *applet;
-	
-	int refresh_time;
-	
-	DevInfo devinfo;
-	gboolean device_has_changed;
-};
 
 static void
 update_tooltip(Netspeed* applet);
@@ -148,26 +132,28 @@ change_icons(Netspeed *applet)
 	GdkPixbuf *in_arrow, *out_arrow;
 	GtkIconTheme *icon_theme;
 	gboolean change_icon;
+	NetworkDeviceType type;
+	NetworkDeviceState state;
 
 	icon_theme = gtk_icon_theme_get_default();
 	/* If the user wants a different icon then the eth0, we load it */
 	g_object_get (priv->settings, "display-specific-icon", &change_icon, NULL);
+	g_object_get (priv->device, "type", &type, "state", &state, NULL);
 	if (change_icon) {
-		dev = gtk_icon_theme_load_icon(icon_theme, 
-                        dev_type_icon[priv->stuff->devinfo.type], 16, 0, NULL);
+		dev = gtk_icon_theme_load_icon(icon_theme,
+                        dev_type_icon[type], 16, 0, NULL);
 	} else {
         	dev = gtk_icon_theme_load_icon(icon_theme, 
-					       dev_type_icon[DEV_UNKNOWN], 
+					       dev_type_icon[NETWORK_DEVICE_TYPE_UNKNOWN], 
 					       16, 0, NULL);
 	}
     
-    	/* We need a fallback */
-    	if (dev == NULL) 
-		dev = gtk_icon_theme_load_icon(icon_theme, 
-					       dev_type_icon[DEV_UNKNOWN],
-					       16, 0, NULL);
-        
-    
+	/* We need a fallback */
+	if (dev == NULL)
+	dev = gtk_icon_theme_load_icon(icon_theme, 
+					   dev_type_icon[NETWORK_DEVICE_TYPE_UNKNOWN],
+					   16, 0, NULL);
+	
 	in_arrow = gtk_icon_theme_load_icon(icon_theme, IN_ICON, 16, 0, NULL);
 	out_arrow = gtk_icon_theme_load_icon(icon_theme, OUT_ICON, 16, 0, NULL);
 
@@ -179,7 +165,7 @@ change_icons(Netspeed *applet)
 	gdk_pixbuf_unref(in_arrow);
 	gdk_pixbuf_unref(out_arrow);
 	
-	if (priv->stuff->devinfo.running) {
+	if (state & NETWORK_DEVICE_STATE_RUNNING) {
 		gtk_widget_show(priv->in_box);
 		gtk_widget_show(priv->out_box);
 	} else {
@@ -193,9 +179,9 @@ change_icons(Netspeed *applet)
         	down = gtk_icon_theme_load_icon(icon_theme, ERROR_ICON, 16, 0, NULL);	
 		gdk_pixbuf_composite(down, copy, 8, 8, 8, 8, 8, 8, 0.5, 0.5, GDK_INTERP_BILINEAR, 0xFF);
 		g_object_unref(down);
-	      	g_object_unref(dev);
+		g_object_unref(dev);
 		dev = copy;
-	}		
+	}
 
 	gtk_image_set_from_pixbuf(GTK_IMAGE(priv->dev_pix), dev);
 	g_object_unref(dev);
@@ -206,9 +192,10 @@ update_quality_icon(Netspeed *applet)
 {
 	NetspeedPrivate *priv = applet->priv;
 	unsigned int q;
-	
-	q = (priv->stuff->devinfo.qual);
-	q /= 25;
+	int wifi_quality;
+
+	g_object_get (priv->device, "wifi-quality", &wifi_quality, NULL);
+	q = wifi_quality / 25;
 	q = CLAMP(q, 0, 3); /* q out of range would crash when accessing qual_pixbufs[q] */
 	gtk_image_set_from_pixbuf (GTK_IMAGE(priv->qual_pix), priv->qual_pixbufs[q]);
 }
@@ -237,14 +224,32 @@ icon_theme_changed_cb(GtkIconTheme *icon_theme, gpointer user_data)
 {
 	Netspeed *applet = NETSPEED (user_data);
 	NetspeedPrivate *priv = applet->priv;
+	NetworkDeviceType type;
+	NetworkDeviceState state;
 
 	init_quality_pixbufs (applet);
-	if (priv->stuff->devinfo.type == DEV_WIRELESS && priv->stuff->devinfo.up) {
+	g_object_get (priv->device, "type", &type, "state", &state, NULL);
+	if (type == NETWORK_DEVICE_TYPE_WIRELESS &&
+		(state & NETWORK_DEVICE_STATE_UP)) {
 		update_quality_icon (applet);
 	}
 	change_icons (applet);
 }
 
+
+static void
+netspeed_set_network_device (Netspeed *applet, NetworkDevice *device)
+{
+	NetspeedPrivate *priv = applet->priv;
+	g_return_if_fail (IS_NETWORK_DEVICE (device));
+
+	if (priv->device) {
+		g_object_unref (priv->device);
+	}
+	priv->device = g_object_ref (device);
+}
+
+#if 0
 static gboolean
 set_applet_devinfo(NetspeedApplet* applet, const char* iface)
 {
@@ -287,11 +292,13 @@ search_for_up_if(NetspeedApplet *applet)
 	}
 	free_devices_list(devices);
 }
+#endif
 
 /* Here happens the really interesting stuff */
 static void
 update_applet(Netspeed *applet)
 {
+#if 0
 	NetspeedPrivate *priv = NETSPEED (applet)->priv;
 	guint64 indiff, outdiff;
 	double inrate, outrate;
@@ -419,15 +426,7 @@ update_applet(Netspeed *applet)
 			search_for_up_if(priv->stuff);
 		}
 	}
-}
-
-static gboolean
-timeout_function(gpointer user_data)
-{
-	Netspeed *applet = NETSPEED (user_data);
-	
-	update_applet (applet);
-	return TRUE;
+#endif
 }
 
 /* Block the size_request signal emit by the label if the
@@ -454,23 +453,38 @@ update_tooltip(Netspeed* applet)
 	NetspeedPrivate *priv = NETSPEED (applet)->priv;
 	GString* tooltip;
 	gboolean show_sum;
+	char *ipv4_addr;
+	char *netmask;
+	char *hw_addr;
+	char *ptp_addr;
+	char *name;
+	NetworkDeviceState state;
+	NetworkDeviceType type;
 
 	if (!priv->show_tooltip) {
 		return;
 	}
 
 	g_object_get (priv->settings, "display-sum", &show_sum, NULL);
+	g_object_get (priv->device,
+			"state", &state,
+			"name", &name,
+			"ipv4-addr", &ipv4_addr,
+			"netmask", &netmask,
+			"hw-addr", &hw_addr,
+			"ptp-addr", &ptp_addr,
+			NULL);
 
 	tooltip = g_string_new("");
+#if 0
+	if (state & NETWORK_DEVICE_STATE_RUNNING) {
 	if (!priv->stuff->devinfo.running) {
-		g_string_printf(tooltip, _("%s is down"), priv->stuff->devinfo.name);
-	} else {
 		if (show_sum) {
 			g_string_printf(
 				  tooltip,
 				  _("%s: %s\nin: %s out: %s"),
-				  priv->stuff->devinfo.name,
-				  priv->stuff->devinfo.ip ? priv->stuff->devinfo.ip : _("has no ip"),
+				  name,
+				  ipv4_addr ? ipv4_addr : _("has no ip"),
 				  priv->stuff->devinfo.rx_rate,
 				  priv->stuff->devinfo.tx_rate
 				  );
@@ -478,12 +492,12 @@ update_tooltip(Netspeed* applet)
 			g_string_printf(
 				  tooltip,
 				  _("%s: %s\nsum: %s"),
-				  priv->stuff->devinfo.name,
-				  priv->stuff->devinfo.ip ? priv->stuff->devinfo.ip : _("has no ip"),
+				  name,
+				  ipv4_addr ? ipv4_addr : _("has no ip"),
 				  priv->stuff->devinfo.sum_rate
 				  );
 		}
-		if (priv->stuff->devinfo.type == DEV_WIRELESS) {
+		if (type == NETWORK_DEVICE_TYPE_WIRELESS) {
 			g_string_append_printf(
 					 tooltip,
 					 _("\nESSID: %s\nStrength: %d %%"),
@@ -491,13 +505,28 @@ update_tooltip(Netspeed* applet)
 					 priv->stuff->devinfo.qual
 					 );
 		}
+	} else {
+		g_string_printf(tooltip, _("%s is down"), priv->stuff->devinfo.name);
 	}
+#endif
+	g_free (name);
+	g_free (ipv4_addr);
+	g_free (netmask);
+	g_free (hw_addr);
+	g_free (ptp_addr);
 
 	gtk_widget_set_tooltip_text(GTK_WIDGET(applet), tooltip->str);
 	gtk_widget_trigger_tooltip_query(GTK_WIDGET(applet));
 	g_string_free(tooltip, TRUE);
 }
 
+static void
+network_device_changed_cb(NetworkDevice *device, gpointer user_data)
+{
+	Netspeed *applet = NETSPEED (user_data);
+	
+	update_applet (applet);
+}
 
 static void
 settings_display_sum_changed_cb (GObject *object,
@@ -527,10 +556,11 @@ settings_device_changed_cb (GObject *object,
 	NetspeedPrivate *priv = applet->priv;
 	char *device;
 
+#if 0
 	g_object_get (object, "device", &device, NULL);
 	get_device_info (device, &priv->stuff->devinfo);
 	priv->stuff->device_has_changed = TRUE;
-	update_applet (applet);
+#endif
 }
 
 static void
@@ -559,25 +589,17 @@ static void
 netspeed_init (Netspeed *self)
 {
 	NetspeedPrivate *priv = NETSPEED_GET_PRIVATE (self);
-	NetspeedApplet *applet;
 	int i;
 	GtkIconTheme *icon_theme;
 	GtkWidget *spacer, *spacer_box;
 	
 	/* Install shortcut */
 	self->priv = priv;
-
 	gtk_widget_set_name (GTK_WIDGET(self), "PanelApplet");
-	
-	/* Alloc the applet. The "NULL-setting" is really redudant
- 	 * but aren't we paranoid?
-	 */
-	applet = g_malloc0(sizeof(NetspeedApplet));
-	applet->applet = PANEL_APPLET(self);
-	priv->stuff = applet;
-	memset(&applet->devinfo, 0, sizeof(DevInfo));
-	applet->refresh_time = 1000.0;
 
+	panel_applet_set_flags (PANEL_APPLET (self),
+			PANEL_APPLET_EXPAND_MINOR);
+	
 #if 0
 	for (i = 0; i < GRAPH_VALUES; i++)
 	{
@@ -585,9 +607,9 @@ netspeed_init (Netspeed *self)
 		applet->out_graph[i] = -1;
 	}	
 #endif
-	priv->in_label = gtk_label_new("");
-	priv->out_label = gtk_label_new("");
-	priv->sum_label = gtk_label_new("");
+	priv->in_label = gtk_label_new("test");
+	priv->out_label = gtk_label_new("test");
+	priv->sum_label = gtk_label_new("test");
 	
 	priv->in_pix = gtk_image_new();
 	priv->out_pix = gtk_image_new();
@@ -653,10 +675,6 @@ netspeed_factory (PanelApplet *applet, const gchar *iid, gpointer data)
 	priv->settings = settings_new_with_gconf_path (gconf_path);
 	g_free (gconf_path);
 
-	g_object_get (priv->settings, "device", &device, NULL);
-	get_device_info(device, &priv->stuff->devinfo);
-	g_free (device);
-
 	g_signal_connect (G_OBJECT (priv->settings),
 					"notify::display-sum",
 					G_CALLBACK (settings_display_sum_changed_cb),
@@ -670,34 +688,20 @@ netspeed_factory (PanelApplet *applet, const gchar *iid, gpointer data)
 					G_CALLBACK (settings_device_changed_cb),
 					applet);
 
-	if (!priv->stuff->devinfo.name) {
-		GList *ptr, *devices = get_available_devices();
-		ptr = devices;
-		while (ptr) { 
-			if (!g_str_equal(ptr->data, "lo")) {
-				get_device_info(ptr->data, &priv->stuff->devinfo);
-				break;
-			}
-			ptr = g_list_next(ptr);
-		}
-		free_devices_list(devices);		
-	}
-	if (!priv->stuff->devinfo.name)
-		get_device_info("lo", &priv->stuff->devinfo);	
-	priv->stuff->device_has_changed = TRUE;	
-	
+	g_object_get (priv->settings, "device", &device, NULL);
+	priv->device = network_device_new (device);
+	g_free (device);
+
+	g_signal_connect (G_OBJECT (priv->device),
+					"changed",
+					G_CALLBACK (network_device_changed_cb),
+					applet);
+
 	init_quality_pixbufs (NETSPEED (applet));
-
 	netspeed_relayout (NETSPEED (applet));
-	update_applet(NETSPEED (applet));
-
-	panel_applet_set_flags(applet, PANEL_APPLET_EXPAND_MINOR);
 
 	gtk_widget_show_all(GTK_WIDGET(applet));
 
-	priv->timeout_id = g_timeout_add (priv->stuff->refresh_time,
-									timeout_function,
-									applet);
 
 	return TRUE;
 }
@@ -803,11 +807,11 @@ static gboolean
 netspeed_button_press_event (GtkWidget *widget, GdkEventButton *event)
 {
 	NetspeedPrivate *priv = NETSPEED (widget)->priv;
-	char *up_cmd, *down_cmd;
 
 	if (event->button == 1)
 	{
 		GError *error = NULL;
+		char *up_cmd, *down_cmd;
 		
 		if (priv->connect_dialog)
 		{	
@@ -823,8 +827,14 @@ netspeed_button_press_event (GtkWidget *widget, GdkEventButton *event)
 		{
 			const char *question;
 			int response;
+			NetworkDeviceState state;
+			char *name;
 			
-			if (priv->stuff->devinfo.up)
+			g_object_get (priv->device,
+					"state", &state,
+					"name", &name,
+					NULL);
+			if (state & NETWORK_DEVICE_STATE_UP)
 			{
 				question = _("Do you want to disconnect %s now?");
 			} 
@@ -837,19 +847,20 @@ netspeed_button_press_event (GtkWidget *widget, GdkEventButton *event)
 					GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
 					GTK_MESSAGE_QUESTION, GTK_BUTTONS_YES_NO,
 					question,
-					priv->stuff->devinfo.name);
+					name);
 			response = gtk_dialog_run(GTK_DIALOG(priv->connect_dialog));
 			gtk_widget_destroy (priv->connect_dialog);
 			priv->connect_dialog = NULL;
-			
+			g_free (name);
+
 			if (response == GTK_RESPONSE_YES)
 			{
 				GtkWidget *dialog;
 				char *command;
 				
 				command = g_strdup_printf("%s %s", 
-					priv->stuff->devinfo.up ? down_cmd : up_cmd,
-					priv->stuff->devinfo.name);
+					state & NETWORK_DEVICE_STATE_UP ? down_cmd : up_cmd,
+					network_device_name (priv->device));
 
 				if (!g_spawn_command_line_async(command, &error))
 				{
@@ -1011,7 +1022,7 @@ netspeed_menu_show_info_dialog (BonoboUIComponent *uic, gpointer data, const gch
 		return;
 	}
 	
-	priv->info_dialog = info_dialog_new (priv->settings);
+	priv->info_dialog = info_dialog_new (priv->settings, priv->device);
 	g_signal_connect (G_OBJECT (priv->info_dialog), "response",
 			 G_CALLBACK (info_dialog_response_cb), applet);
 
@@ -1134,7 +1145,6 @@ netspeed_display_help_section (GtkWidget *parent, const gchar *section)
 	}
 }
 
-
 static void
 netspeed_dispose (GObject *object)
 {
@@ -1146,6 +1156,11 @@ netspeed_dispose (GObject *object)
 		priv->settings = NULL;
 	}
 
+	if (priv->device) {
+		g_object_unref (priv->device);
+		priv->device = NULL;
+	}
+
 	G_OBJECT_CLASS (netspeed_parent_class)->dispose (object);
 }
 
@@ -1153,21 +1168,14 @@ static void
 netspeed_finalize (GObject *object)
 {
 	NetspeedPrivate *priv;
-	NetspeedApplet *applet;
 	GtkIconTheme *icon_theme;
 
 	priv = NETSPEED (object)->priv;
-	applet = priv->stuff;
 
 	icon_theme = gtk_icon_theme_get_default();
 	g_object_disconnect(G_OBJECT(icon_theme), "any_signal::changed",
 						G_CALLBACK(icon_theme_changed_cb), object,
 						NULL);
-
-	g_source_remove(priv->timeout_id);
-
-	free_device_info(&applet->devinfo);
-	g_free(applet);
 
 	G_OBJECT_CLASS (netspeed_parent_class)->finalize (object);
 }

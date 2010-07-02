@@ -125,7 +125,7 @@ free_devices_list(GList *list)
 	g_list_free(list);
 }
 
-
+#if 0
 /* Frees a DevInfo struct and all the stuff it contains
  */
 void
@@ -186,8 +186,6 @@ get_ptp_info(DevInfo *devinfo)
 
 	close(fd);
 }
-
-
 
 
 void
@@ -325,4 +323,5 @@ out:
 	if (fd != -1)
 		close (fd);
 }
+#endif
 #endif /* HAVE_IW */

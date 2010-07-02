@@ -38,18 +38,7 @@
 #define SIOCGIWNAME     0x8B01          /* get name == wireless protocol */
 #define SIOCGIWENCODE	0x8B2B		    /* get encoding token & mode */
 
-/* Different types of interfaces */
-typedef enum
-{
-	DEV_LO,
-	DEV_ETHERNET,
-	DEV_WIRELESS,
-	DEV_PPP,
-	DEV_PLIP,
-	DEV_SLIP,
-	DEV_UNKNOWN	// this has to be the last one
-} DevType;	
-
+#if 0
 /* Some information about the selected network device
  */
 typedef struct
@@ -69,6 +58,7 @@ typedef struct
 	char *rx_rate;
 	char *sum_rate;
 } DevInfo;
+#endif
 
 GList*
 get_available_devices(void);
@@ -82,6 +72,7 @@ is_dummy_device(const char* device);
 void
 free_devices_list(GList *list);
 
+#if 0
 void
 free_device_info(DevInfo *devinfo);
 
@@ -93,4 +84,6 @@ compare_device_info(const DevInfo *a, const DevInfo *b);
 
 void 
 get_wireless_info (DevInfo *devinfo);
+#endif
+
 #endif /* _BACKEND_H */

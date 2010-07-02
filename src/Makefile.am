@@ -10,6 +10,8 @@ libexec_PROGRAMS = netspeed_applet2
 netspeed_applet2_SOURCES = \
 	backend.h \
 	backend.c \
+	network-device.h \
+	network-device.c \
 	utils.h \
 	utils.c \
 	settings.h \

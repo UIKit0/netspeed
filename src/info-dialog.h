@@ -23,6 +23,7 @@
 
 #include <gtk/gtk.h>
 #include "settings.h"
+#include "network-device.h"
 
 G_BEGIN_DECLS
 
@@ -50,7 +51,9 @@ struct _InfoDialog
 
 GType info_dialog_get_type (void);
 
-GtkWidget* info_dialog_new (Settings*);
+GtkWidget* info_dialog_new (Settings *settings, NetworkDevice *device);
+
+void info_dialog_set_device (InfoDialog *info_dialog, NetworkDevice *device);
 
 void info_dialog_update (InfoDialog *info_dialog);
 

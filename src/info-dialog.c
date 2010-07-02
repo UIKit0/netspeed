@@ -24,7 +24,6 @@
 
 #include <glib/gi18n.h>
 #include "info-dialog.h"
-#include "backend.h"
 #include "utils.h"
 
 #define GRAPH_VALUES 180
@@ -34,7 +33,7 @@ enum
 {
 	PROP_0,
 	PROP_SETTINGS,
-	PROP_DEV_INFO
+	PROP_DEVICE
 };
 
 struct _InfoDialogPrivate
@@ -43,8 +42,12 @@ struct _InfoDialogPrivate
 	GtkWidget *signalbar;
 	GtkWidget *inbytes_text;
 	GtkWidget *outbytes_text;
+	GtkWidget *ip_text;
+	GtkWidget *netmask_text;
+	GtkWidget *hwaddr_text;
+	GtkWidget *ptpip_text;
 	
-	DevInfo devinfo;
+	NetworkDevice *device;
 
 	double max_graph, in_graph[GRAPH_VALUES], out_graph[GRAPH_VALUES];
 	int index_graph;
@@ -66,6 +69,124 @@ static void info_dialog_set_property (GObject *object, guint property_id, const 
 static void info_dialog_get_property (GObject *object, guint property_id, GValue *value, GParamSpec *pspec);
 
 G_DEFINE_TYPE (InfoDialog, info_dialog, GTK_TYPE_DIALOG);
+
+GtkWidget*
+info_dialog_new (Settings *settings, NetworkDevice *device)
+{
+	return g_object_new (INFO_DIALOG_TYPE,
+						"settings", settings,
+						"device", device,
+						"has-separator", FALSE,
+						NULL);
+}
+
+static void
+network_device_changed_cb (NetworkDevice *device, gpointer user_data)
+{
+	InfoDialogPrivate *priv = INFO_DIALOG (user_data)->priv;
+	
+	char *inbytes, *outbytes;
+	gboolean show_bits;
+	int wifi_quality;
+	guint64 rx, tx;
+
+	g_object_get (priv->device,
+				"wifi-quality", &wifi_quality,
+				"rx", &rx, "tx", &tx,
+				NULL);
+
+	if (priv->signalbar) {
+		float quality;
+		char *text;
+
+		quality = wifi_quality / 100.0f;
+		if (quality > 1.0)
+			quality = 1.0;
+
+		text = g_strdup_printf ("%d %%", wifi_quality);
+		gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (priv->signalbar), quality);
+		gtk_progress_bar_set_text (GTK_PROGRESS_BAR (priv->signalbar), text);
+		g_free(text);
+	}
+
+	g_object_get (priv->settings,
+			"display-bits", &show_bits,
+			NULL);
+	/* Refresh the values of the Infodialog */
+	if (priv->inbytes_text) {
+		inbytes = bytes_to_string((double)rx, FALSE, show_bits);
+		gtk_label_set_text(GTK_LABEL(priv->inbytes_text), inbytes);
+		g_free(inbytes);
+	}	
+	if (priv->outbytes_text) {
+		outbytes = bytes_to_string((double)tx, FALSE, show_bits);
+		gtk_label_set_text(GTK_LABEL(priv->outbytes_text), outbytes);
+		g_free(outbytes);
+	}
+#if 0
+	/* Redraw the graph of the Infodialog */
+	if (priv->drawingarea)
+		redraw_graph(priv);
+#endif
+}
+
+void
+info_dialog_set_device (InfoDialog *info_dialog, NetworkDevice *device)
+{
+	InfoDialogPrivate *priv;
+	char *title;
+	char *ipv4_addr;
+	char *netmask;
+	char *hw_addr;
+	char *ptp_addr;
+
+	g_return_if_fail (IS_NETWORK_DEVICE (device));
+	g_return_if_fail (IS_INFO_DIALOG (info_dialog));
+
+	priv = info_dialog->priv;
+
+	if (priv->device) {
+		g_object_unref (device);
+	}
+	priv->device = g_object_ref (device);
+
+	title = g_strdup_printf(_("Device Details for %s"),
+					network_device_name (priv->device));
+	gtk_window_set_title (GTK_WINDOW (info_dialog), title);
+	g_free(title);
+
+	g_object_get (priv->device,
+			"ipv4-addr", &ipv4_addr,
+			"netmask", &netmask,
+			"hw-addr", &hw_addr,
+			"ptp-addr", &ptp_addr,
+			NULL);
+
+	gtk_label_set_text (GTK_LABEL(priv->ip_text), ipv4_addr ? ipv4_addr : _("none"));
+	gtk_label_set_text (GTK_LABEL(priv->netmask_text), netmask ? netmask : _("none"));
+	gtk_label_set_text (GTK_LABEL(priv->hwaddr_text), hw_addr ? hw_addr : _("none"));
+	gtk_label_set_text (GTK_LABEL(priv->ptpip_text), ptp_addr ? ptp_addr : _("none"));
+
+	g_free (ipv4_addr);
+	g_free (netmask);
+	g_free (hw_addr);
+	g_free (ptp_addr);
+#if 0
+		for (i = 0; i < GRAPH_VALUES; i++)
+		{
+			priv->in_graph[i] = -1;
+			priv->out_graph[i] = -1;
+		}
+		priv->max_graph = 0;
+		priv->index_graph = 0;
+#endif
+
+	g_signal_connect (G_OBJECT (priv->device),
+					"changed",
+					G_CALLBACK (network_device_changed_cb),
+					info_dialog);
+}
+
 
 #if 0
 /* Redraws the graph drawingarea
@@ -219,7 +340,13 @@ info_dialog_class_init (InfoDialogClass *klass)
 							 "Settings",
 							 "The netspeed settings.",
 							 SETTINGS_TYPE,
-							 G_PARAM_CONSTRUCT_ONLY | G_PARAM_READWRITE));
+							 G_PARAM_CONSTRUCT_ONLY | G_PARAM_WRITABLE));
+	g_object_class_install_property (object_class, PROP_DEVICE,
+		g_param_spec_object ("device",
+							 "Device",
+							 "The network device.",
+							 NETWORK_DEVICE_TYPE,
+							 G_PARAM_CONSTRUCT | G_PARAM_WRITABLE));
 }
 
 static void
@@ -235,14 +362,9 @@ info_dialog_init (InfoDialog *self)
 	GtkWidget *inbytes_label, *outbytes_label;
 	GtkWidget *incolor_sel, *incolor_label;
 	GtkWidget *outcolor_sel, *outcolor_label;
-	char *title;
 
 	priv = INFO_DIALOG_GET_PRIVATE (self);
 	self->priv = priv;
-
-	title = g_strdup_printf(_("Device Details for %s"), priv->devinfo.name);
-	gtk_window_set_title (GTK_WINDOW (self), title);
-	g_free(title);
 
 	gtk_dialog_add_buttons (GTK_DIALOG (self),
 							GTK_STOCK_HELP, GTK_RESPONSE_HELP,
@@ -289,10 +411,10 @@ info_dialog_init (InfoDialog *self)
 	inbytes_label = gtk_label_new(_("Bytes in:"));
 	outbytes_label = gtk_label_new(_("Bytes out:"));
 	
-	ip_text = gtk_label_new(priv->devinfo.ip ? priv->devinfo.ip : _("none"));
-	netmask_text = gtk_label_new(priv->devinfo.netmask ? priv->devinfo.netmask : _("none"));
-	hwaddr_text = gtk_label_new(priv->devinfo.hwaddr ? priv->devinfo.hwaddr : _("none"));
-	ptpip_text = gtk_label_new(priv->devinfo.ptpip ? priv->devinfo.ptpip : _("none"));
+	priv->ip_text = gtk_label_new(NULL);
+	priv->netmask_text = gtk_label_new(NULL);
+	priv->hwaddr_text = gtk_label_new(NULL);
+	priv->ptpip_text = gtk_label_new(NULL);
 	priv->inbytes_text = gtk_label_new("0 byte");
 	priv->outbytes_text = gtk_label_new("0 byte");
 
@@ -326,7 +448,8 @@ info_dialog_init (InfoDialog *self)
 	gtk_table_attach_defaults(GTK_TABLE(table), priv->inbytes_text, 1, 2, 2, 3);
 	gtk_table_attach_defaults(GTK_TABLE(table), outbytes_label, 2, 3, 2, 3);
 	gtk_table_attach_defaults(GTK_TABLE(table), priv->outbytes_text, 3, 4, 2, 3);
-	
+
+#if 0	
 	/* check if we got an ipv6 address */
 	if (priv->devinfo.ipv6 && (strlen (priv->devinfo.ipv6) > 2)) {
 		GtkWidget *ipv6_label, *ipv6_text;
@@ -378,6 +501,7 @@ info_dialog_init (InfoDialog *self)
 		gtk_table_attach_defaults (GTK_TABLE (table), essid_label, 0, 3, 4, 5);
 		gtk_table_attach_defaults (GTK_TABLE (table), essid_text, 1, 4, 4, 5);
 	}
+#endif
 
 #if 0
 	g_signal_connect(G_OBJECT(applet->drawingarea), "expose_event",
@@ -422,6 +546,7 @@ info_dialog_constructed (GObject *object)
 	}
 }
 
+
 static void
 info_dialog_set_property (GObject    *object,
 						guint         property_id,
@@ -434,6 +559,9 @@ info_dialog_set_property (GObject    *object,
 		case PROP_SETTINGS:
 			priv->settings = g_value_dup_object (value);
 			break;
+		case PROP_DEVICE:
+			info_dialog_set_device (INFO_DIALOG (object), g_value_get_object (value));
+			break;
 	}
 }
 
@@ -443,18 +571,26 @@ info_dialog_get_property (GObject    *object,
 						GValue       *value,
 						GParamSpec   *pspec)
 {
-	InfoDialogPrivate *priv = INFO_DIALOG (object)->priv;
-
-	switch (property_id) {
-		case PROP_SETTINGS:
-			g_value_set_object (value, priv->settings);
-			break;
-	}
+	/* No readable props */
 }
 
 static void
 info_dialog_dispose (GObject *object)
 {
+	InfoDialogPrivate *priv = INFO_DIALOG (object)->priv;
+
+	if (priv->settings) {
+		g_object_unref (priv->settings);
+		priv->settings = NULL;
+	}
+	if (priv->device) {
+		g_object_disconnect(G_OBJECT(priv->device), "any_signal::changed",
+						G_CALLBACK(network_device_changed_cb), object,
+						NULL);
+		g_object_unref (priv->device);
+		priv->device = NULL;
+	}
+
 	G_OBJECT_CLASS (info_dialog_parent_class)->dispose (object);
 }
 
@@ -462,71 +598,5 @@ static void
 info_dialog_finalize (GObject *object)
 {
 	G_OBJECT_CLASS (info_dialog_parent_class)->finalize (object);
-}
-
-GtkWidget*
-info_dialog_new (Settings *settings)
-{
-	return g_object_new (INFO_DIALOG_TYPE,
-						"settings", settings,
-						"has-separator", FALSE,
-						NULL);
-}
-
-void
-info_dialog_device_changed (InfoDialog *info_dialog)
-{
-#if 0
-		for (i = 0; i < GRAPH_VALUES; i++)
-		{
-			priv->in_graph[i] = -1;
-			priv->out_graph[i] = -1;
-		}
-		priv->max_graph = 0;
-		priv->index_graph = 0;
-#endif
-
-}
-
-void
-info_dialog_update (InfoDialog *info_dialog)
-{
-	InfoDialogPrivate *priv = INFO_DIALOG (info_dialog)->priv;
-	char *inbytes, *outbytes;
-	gboolean show_bits;
-
-	if (priv->signalbar) {
-		float quality;
-		char *text;
-
-		quality = priv->devinfo.qual / 100.0f;
-		if (quality > 1.0)
-			quality = 1.0;
-
-		text = g_strdup_printf ("%d %%", priv->devinfo.qual);
-		gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (priv->signalbar), quality);
-		gtk_progress_bar_set_text (GTK_PROGRESS_BAR (priv->signalbar), text);
-		g_free(text);
-	}
-
-	g_object_get (priv->settings,
-			"display-bits", &show_bits,
-			NULL);
-	/* Refresh the values of the Infodialog */
-	if (priv->inbytes_text) {
-		inbytes = bytes_to_string((double)priv->devinfo.rx, FALSE, show_bits);
-		gtk_label_set_text(GTK_LABEL(priv->inbytes_text), inbytes);
-		g_free(inbytes);
-	}	
-	if (priv->outbytes_text) {
-		outbytes = bytes_to_string((double)priv->devinfo.tx, FALSE, show_bits);
-		gtk_label_set_text(GTK_LABEL(priv->outbytes_text), outbytes);
-		g_free(outbytes);
-	}
-#if 0
-	/* Redraw the graph of the Infodialog */
-	if (priv->drawingarea)
-		redraw_graph(priv);
-#endif
 }
 
