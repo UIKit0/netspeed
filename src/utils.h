@@ -23,12 +23,25 @@
 
 #include <gtk/gtk.h>
 
-/* Converts a number of bytes into a human
- * readable string - in [M/k]bytes[/s]
- * The string has to be freed
- */
-char* bytes_to_string(double bytes, gboolean per_sec, gboolean bits);
+char* bytes_to_string (double bytes, gboolean per_sec, gboolean bits);
 
 gboolean open_uri (GtkWidget *parent, const char *url, GError **error);
+
+typedef struct _RingBuffer RingBuffer;
+struct _RingBuffer {
+	guint64 *rx;
+	guint64 *tx;
+	int oldest, values, size;
+};
+
+RingBuffer *ring_buffer_new (int size);
+
+void ring_buffer_free (RingBuffer *buffer);
+
+void ring_buffer_reset (RingBuffer *buffer);
+
+void ring_buffer_append (RingBuffer *buffer, guint64 rx, guint64 tx);
+
+void ring_buffer_average (RingBuffer *buffer, float *rx, float *tx);
 
 #endif

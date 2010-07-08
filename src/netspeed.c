@@ -56,13 +56,6 @@ static const char OUT_ICON[] = "gtk-go-down";
 static const char ERROR_ICON[] = "gtk-dialog-error";
 static const char LOGO_ICON[] = "netspeed-applet";
 
-/* How many old in out values do we store?
- * The value actually shown in the applet is the average
- * of these values -> prevents the value from
- * "jumping around like crazy"
- */
-#define OLD_VALUES 5
-
 struct _NetspeedPrivate
 {
 	Settings *settings;
@@ -82,9 +75,6 @@ struct _NetspeedPrivate
 	GtkWidget *sum_box, *sum_label;
 
 	GdkPixbuf *qual_pixbufs[4];
-
-	guint index_old;
-	guint64 in_old[OLD_VALUES], out_old[OLD_VALUES];
 
 	gboolean labels_dont_shrink;
 	int width;
@@ -115,7 +105,7 @@ static void netspeed_menu_show_about (BonoboUIComponent *uic, gpointer data, con
 static void netspeed_menu_show_settings_dialog (BonoboUIComponent *uic, gpointer data, const gchar *verbname);
 static void netspeed_menu_show_info_dialog (BonoboUIComponent *uic, gpointer data, const gchar *verbname);
 static void netspeed_display_help_section (GtkWidget *parent, const gchar *section);
-static void netspeed_set_network_device (Netspeed *netspeed, NetworkDevice *device);
+static void netspeed_network_device_changed (Netspeed *applet);
 
 G_DEFINE_TYPE (Netspeed, netspeed, PANEL_TYPE_APPLET);
 
@@ -237,18 +227,6 @@ icon_theme_changed_cb(GtkIconTheme *icon_theme, gpointer user_data)
 }
 
 
-static void
-netspeed_set_network_device (Netspeed *applet, NetworkDevice *device)
-{
-	NetspeedPrivate *priv = applet->priv;
-	g_return_if_fail (IS_NETWORK_DEVICE (device));
-
-	if (priv->device) {
-		g_object_unref (priv->device);
-	}
-	priv->device = g_object_ref (device);
-}
-
 #if 0
 static gboolean
 set_applet_devinfo(NetspeedApplet* applet, const char* iface)
@@ -298,13 +276,12 @@ search_for_up_if(NetspeedApplet *applet)
 static void
 update_applet(Netspeed *applet)
 {
-#if 0
 	NetspeedPrivate *priv = NETSPEED (applet)->priv;
-	guint64 indiff, outdiff;
-	double inrate, outrate;
-	int i;
-	DevInfo oldinfo;
 	gboolean show_sum, show_bits, auto_change_device;
+	NetworkDeviceType type;
+	NetworkDeviceState state;
+	int i;
+	char *sum, *rx, *tx;
 
 	g_object_get (priv->settings,
 			"display-bits", &show_bits,
@@ -312,45 +289,20 @@ update_applet(Netspeed *applet)
 			"default-route", &auto_change_device,
 			NULL);
 	
-	/* First we try to figure out if the device has changed */
-	oldinfo = priv->stuff->devinfo;
-	get_device_info(oldinfo.name, &priv->stuff->devinfo);
-	if (compare_device_info(&priv->stuff->devinfo, &oldinfo))
-		priv->stuff->device_has_changed = TRUE;
-	free_device_info(&oldinfo);
+	g_object_get (priv->device,
+			"type", &type,
+			"state", &state,
+			NULL);
 
-	/* If the device has changed, reintialize stuff */	
-	if (priv->stuff->device_has_changed) {
-		change_icons(applet);
-		if (priv->stuff->devinfo.type == DEV_WIRELESS &&
-			priv->stuff->devinfo.up) {
-			gtk_widget_show(priv->qual_pix);
-		} else {
-			gtk_widget_hide(priv->qual_pix);
-		}	
-		for (i = 0; i < OLD_VALUES; i++)
-		{
-			priv->in_old[i] = priv->stuff->devinfo.rx;
-			priv->out_old[i] = priv->stuff->devinfo.tx;
-		}
-		if (priv->info_dialog) {
-			info_dialog_device_changed (priv->info_dialog);
-		}
-		priv->stuff->device_has_changed = FALSE;
-	}
-		
 	/* create the strings for the labels and tooltips */
-	if (priv->stuff->devinfo.running)
-	{	
-		if (priv->stuff->devinfo.rx < priv->in_old[priv->index_old]) indiff = 0;
-		else indiff = priv->stuff->devinfo.rx - priv->in_old[priv->index_old];
-		if (priv->stuff->devinfo.tx < priv->out_old[priv->index_old]) outdiff = 0;
-		else outdiff = priv->stuff->devinfo.tx - priv->out_old[priv->index_old];
-		
-		inrate = indiff * 1000.0;
-		inrate /= (double)(priv->stuff->refresh_time * OLD_VALUES);
-		outrate = outdiff * 1000.0;
-		outrate /= (double)(priv->stuff->refresh_time * OLD_VALUES);
+	if (state & NETWORK_DEVICE_STATE_RUNNING) {
+		float rx_rate, tx_rate;
+
+		network_device_get_rates (priv->device, &rx_rate, &tx_rate);
+
+		rx = bytes_to_string(rx_rate, TRUE, show_bits);
+		tx = bytes_to_string(tx_rate, TRUE, show_bits);
+		sum = bytes_to_string(rx_rate + tx_rate, TRUE, show_bits);
 
 #if 0
 		priv->in_graph[priv->index_graph] = inrate;
@@ -358,44 +310,30 @@ update_applet(Netspeed *applet)
 		priv->max_graph = MAX(inrate, priv->max_graph);
 		priv->max_graph = MAX(outrate, priv->max_graph);
 #endif
-
-		priv->stuff->devinfo.rx_rate = bytes_to_string(inrate, TRUE, show_bits);
-		priv->stuff->devinfo.tx_rate = bytes_to_string(outrate, TRUE, show_bits);
-		priv->stuff->devinfo.sum_rate = bytes_to_string(inrate + outrate, TRUE, show_bits);
 	} else {
-		priv->stuff->devinfo.rx_rate = g_strdup("");
-		priv->stuff->devinfo.tx_rate = g_strdup("");
-		priv->stuff->devinfo.sum_rate = g_strdup("");
+		rx = tx = sum = NULL;
 #if 0
 		priv->in_graph[priv->index_graph] = 0;
 		priv->out_graph[priv->index_graph] = 0;
 #endif
 	}
 	
-	if (priv->stuff->devinfo.type == DEV_WIRELESS) {
-		if (priv->stuff->devinfo.up)
-			update_quality_icon(applet);
-		
+	if (type == NETWORK_DEVICE_TYPE_WIRELESS &&
+		(state & NETWORK_DEVICE_STATE_UP)) {
+		update_quality_icon(applet);
 	}
-
-	if (priv->info_dialog) {
-		info_dialog_update (INFO_DIALOG (priv->info_dialog));
-	}
-
-	update_tooltip(applet);
 
 	/* Refresh the text of the labels and tooltip */
 	if (show_sum) {
-		gtk_label_set_markup(GTK_LABEL(priv->sum_label), priv->stuff->devinfo.sum_rate);
+		gtk_label_set_text (GTK_LABEL(priv->sum_label), sum);
 	} else {
-		gtk_label_set_markup(GTK_LABEL(priv->in_label), priv->stuff->devinfo.rx_rate);
-		gtk_label_set_markup(GTK_LABEL(priv->out_label), priv->stuff->devinfo.tx_rate);
+		gtk_label_set_text (GTK_LABEL(priv->in_label), rx);
+		gtk_label_set_text (GTK_LABEL(priv->out_label), tx);
 	}
 
-	/* Save old values... */
-	priv->in_old[priv->index_old] = priv->stuff->devinfo.rx;
-	priv->out_old[priv->index_old] = priv->stuff->devinfo.tx;
-	priv->index_old = (priv->index_old + 1) % OLD_VALUES;
+	g_free (sum);
+	g_free (rx);
+	g_free (tx);
 
 #if 0
 	/* Move the graphindex. Check if we can scale down again */
@@ -412,6 +350,7 @@ update_applet(Netspeed *applet)
 	}
 #endif
 
+#if 0
 	/* Always follow the default route */
 	if (auto_change_device) {
 		gboolean change_device_now = !priv->stuff->devinfo.running;
@@ -445,19 +384,23 @@ label_size_request_cb(GtkWidget *widget, GtkRequisition *requisition, gpointer u
 		else
 			priv->width = requisition->width;
 	}
-}	
+}
 
 static void
 update_tooltip(Netspeed* applet)
 {
 	NetspeedPrivate *priv = NETSPEED (applet)->priv;
 	GString* tooltip;
-	gboolean show_sum;
+	gboolean show_sum, show_bits;;
 	char *ipv4_addr;
 	char *netmask;
 	char *hw_addr;
 	char *ptp_addr;
 	char *name;
+	char *essid;
+	char *rx, *tx, *sum;
+	int quality;
+	float rx_rate, tx_rate;
 	NetworkDeviceState state;
 	NetworkDeviceType type;
 
@@ -465,7 +408,10 @@ update_tooltip(Netspeed* applet)
 		return;
 	}
 
-	g_object_get (priv->settings, "display-sum", &show_sum, NULL);
+	g_object_get (priv->settings,
+			"display-sum", &show_sum,
+			"display-bits", &show_bits,
+			NULL);
 	g_object_get (priv->device,
 			"state", &state,
 			"name", &name,
@@ -473,20 +419,26 @@ update_tooltip(Netspeed* applet)
 			"netmask", &netmask,
 			"hw-addr", &hw_addr,
 			"ptp-addr", &ptp_addr,
+			"wifi-essid", &essid,
+			"wifi-quality", &quality,
 			NULL);
 
 	tooltip = g_string_new("");
-#if 0
+	network_device_get_rates (priv->device, &rx_rate, &tx_rate);
+
+	rx = bytes_to_string(rx_rate, TRUE, show_bits);
+	tx = bytes_to_string(tx_rate, TRUE, show_bits);
+	sum = bytes_to_string(rx_rate + tx_rate, TRUE, show_bits);
+
 	if (state & NETWORK_DEVICE_STATE_RUNNING) {
-	if (!priv->stuff->devinfo.running) {
 		if (show_sum) {
 			g_string_printf(
 				  tooltip,
 				  _("%s: %s\nin: %s out: %s"),
 				  name,
 				  ipv4_addr ? ipv4_addr : _("has no ip"),
-				  priv->stuff->devinfo.rx_rate,
-				  priv->stuff->devinfo.tx_rate
+				  rx,
+				  tx
 				  );
 		} else {
 			g_string_printf(
@@ -494,26 +446,29 @@ update_tooltip(Netspeed* applet)
 				  _("%s: %s\nsum: %s"),
 				  name,
 				  ipv4_addr ? ipv4_addr : _("has no ip"),
-				  priv->stuff->devinfo.sum_rate
+				  sum
 				  );
 		}
 		if (type == NETWORK_DEVICE_TYPE_WIRELESS) {
 			g_string_append_printf(
 					 tooltip,
 					 _("\nESSID: %s\nStrength: %d %%"),
-					 priv->stuff->devinfo.essid ? priv->stuff->devinfo.essid : _("unknown"),
-					 priv->stuff->devinfo.qual
+					 essid ? essid : _("unknown"),
+					 quality
 					 );
 		}
 	} else {
-		g_string_printf(tooltip, _("%s is down"), priv->stuff->devinfo.name);
+		g_string_printf(tooltip, _("%s is down"), name);
 	}
-#endif
+	g_free (sum);
+	g_free (rx);
+	g_free (tx);
 	g_free (name);
 	g_free (ipv4_addr);
 	g_free (netmask);
 	g_free (hw_addr);
 	g_free (ptp_addr);
+	g_free (essid);
 
 	gtk_widget_set_tooltip_text(GTK_WIDGET(applet), tooltip->str);
 	gtk_widget_trigger_tooltip_query(GTK_WIDGET(applet));
@@ -521,11 +476,12 @@ update_tooltip(Netspeed* applet)
 }
 
 static void
-network_device_changed_cb(NetworkDevice *device, gpointer user_data)
+network_device_data_changed_cb (NetworkDevice *device, gpointer user_data)
 {
 	Netspeed *applet = NETSPEED (user_data);
 	
 	update_applet (applet);
+	update_tooltip (applet);
 }
 
 static void
@@ -556,11 +512,10 @@ settings_device_changed_cb (GObject *object,
 	NetspeedPrivate *priv = applet->priv;
 	char *device;
 
-#if 0
 	g_object_get (object, "device", &device, NULL);
-	get_device_info (device, &priv->stuff->devinfo);
-	priv->stuff->device_has_changed = TRUE;
-#endif
+	g_object_set (priv->device, "name", device, NULL);
+	g_free (device);
+	netspeed_network_device_changed (applet);
 }
 
 static void
@@ -607,9 +562,9 @@ netspeed_init (Netspeed *self)
 		applet->out_graph[i] = -1;
 	}	
 #endif
-	priv->in_label = gtk_label_new("test");
-	priv->out_label = gtk_label_new("test");
-	priv->sum_label = gtk_label_new("test");
+	priv->in_label = gtk_label_new(NULL);
+	priv->out_label = gtk_label_new(NULL);
+	priv->sum_label = gtk_label_new(NULL);
 	
 	priv->in_pix = gtk_image_new();
 	priv->out_pix = gtk_image_new();
@@ -694,16 +649,39 @@ netspeed_factory (PanelApplet *applet, const gchar *iid, gpointer data)
 
 	g_signal_connect (G_OBJECT (priv->device),
 					"changed",
-					G_CALLBACK (network_device_changed_cb),
+					G_CALLBACK (network_device_data_changed_cb),
 					applet);
 
 	init_quality_pixbufs (NETSPEED (applet));
 	netspeed_relayout (NETSPEED (applet));
+	change_icons (NETSPEED (applet));
 
 	gtk_widget_show_all(GTK_WIDGET(applet));
 
 
 	return TRUE;
+}
+
+static void
+netspeed_network_device_changed (Netspeed *applet)
+{
+	NetspeedPrivate *priv = applet->priv;
+	NetworkDeviceType type;
+	NetworkDeviceState state;
+
+	g_object_get (priv->device,
+			"type", &type,
+			"state", &state,
+			NULL);
+
+	change_icons(applet);
+
+	if (type == NETWORK_DEVICE_TYPE_WIRELESS &&
+		(state & NETWORK_DEVICE_STATE_UP)) {
+		gtk_widget_show(priv->qual_pix);
+	} else {
+		gtk_widget_hide(priv->qual_pix);
+	}
 }
 
 /* Here some rearangement of the icons and the labels occurs

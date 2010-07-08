@@ -75,6 +75,8 @@ GType network_device_get_type (void);
 NetworkDevice* network_device_new (const char *name);
 const char* network_device_name (NetworkDevice* device);
 
+void network_device_get_rates (NetworkDevice *device, float *rx_rate, float *tx_rate);
+
 G_END_DECLS
 
 #endif

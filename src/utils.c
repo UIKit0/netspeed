@@ -71,7 +71,6 @@ bytes_to_string(double bytes, gboolean per_sec, gboolean bits)
 	return g_strdup_printf(format, bytes, gettext(unit));
 }
 
-
 gboolean
 open_uri (GtkWidget *parent, const char *url, GError **error)
 {
@@ -105,6 +104,65 @@ add_markup_fgcolor(char **string, const char *color)
 	char *tmp = *string;
 	*string = g_strdup_printf("<span foreground=\"%s\">%s</span>", color, tmp);
 	g_free(tmp);
+}
+
+RingBuffer *ring_buffer_new (int size)
+{
+	RingBuffer *buffer = g_new0(RingBuffer, 1);
+	buffer->rx = g_new0(guint64, size);
+	buffer->tx = g_new0(guint64, size);
+	buffer->size = size;
+
+	return buffer;
+}
+
+void ring_buffer_free (RingBuffer *buffer)
+{
+	g_free (buffer->rx);
+	g_free (buffer->tx);
+	g_free (buffer);
+}
+
+void ring_buffer_reset (RingBuffer *buffer)
+{
+	int i;
+	for (i = 0; i < buffer->size; i++) {
+		buffer->rx[i] = buffer->tx[i] = 0;
+	}
+	buffer->oldest = buffer->values = 0;
+}
+
+void ring_buffer_append (RingBuffer *buffer, guint64 rx, guint64 tx)
+{
+	int i = buffer->oldest;
+	buffer->rx[i] = rx;
+	buffer->tx[i] = tx;
+	if (buffer->values < buffer->size) {
+		buffer->values++;
+	}
+	buffer->oldest = (i + 1) % buffer->size;
+}
+
+void ring_buffer_average (RingBuffer *buffer, float *rx, float *tx)
+{
+	int oldest, newest;
+
+	if (buffer->values < 0) {
+		*rx = 0;
+		*tx = 0;
+		return;
+	}
+
+	if (buffer->values < buffer->size) {
+		oldest = 0;
+		newest = buffer->oldest - 1;
+	} else {
+		oldest = buffer->oldest;
+		newest = buffer->oldest > 0 ? buffer->oldest - 1 : buffer->size - 1;
+	}
+
+	*rx = (buffer->rx[newest] - buffer->rx[oldest]) * 1.0f / buffer->values;
+	*tx = (buffer->tx[newest] - buffer->tx[oldest]) * 1.0f / buffer->values;
 }
 
 

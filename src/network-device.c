@@ -34,6 +34,7 @@
  #include <iwlib.h>
 #endif /* HAVE_IW */
 
+#include "utils.h"
 #include "network-device.h"
 
 enum
@@ -70,10 +71,12 @@ struct _NetworkDevicePrivate
 	char *hw_addr;
 	struct {
 		char *essid;
-		int	quality;
+		int   quality;
 	} wifi;
 	guint state;
 	guint64 tx, rx;
+
+	RingBuffer *buffer;
 
 	guint timeout_id;
 };
@@ -110,6 +113,15 @@ network_device_name (NetworkDevice* device)
 	return device->priv->name;
 }
 
+void
+network_device_get_rates (NetworkDevice *device, float *rx_rate, float *tx_rate)
+{
+	*rx_rate = *tx_rate = 0;
+
+	g_return_if_fail (IS_NETWORK_DEVICE (device));
+	ring_buffer_average (device->priv->buffer, rx_rate, tx_rate);
+}
+
 static void
 network_device_class_init (NetworkDeviceClass *klass)
 {
@@ -140,7 +152,7 @@ network_device_class_init (NetworkDeviceClass *klass)
 							"Name",
 							"The name of the device that is monitored.",
 							"lo",
-							G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
+							G_PARAM_READWRITE));
 	g_object_class_install_property (object_class, PROP_IPV4_ADDR,
 		g_param_spec_string ("ipv4-addr",
 							"IPv4-address",
@@ -212,6 +224,7 @@ network_device_init (NetworkDevice *self)
 	priv->timeout_id = g_timeout_add (1000,
 									timeout_function,
 									self);
+	priv->buffer = ring_buffer_new (5);
 }
 
 static void
@@ -274,6 +287,8 @@ network_device_set_property (GObject *object,
 		case PROP_NAME:
 			g_free (priv->name);
 			priv->name = g_value_dup_string (value);
+			ring_buffer_reset (priv->buffer);
+			g_object_notify (object, "name");
 			break;
 	}
 }
@@ -298,6 +313,7 @@ network_device_finalize (GObject *object)
 	g_source_remove (priv->timeout_id);
 	network_device_reset (NETWORK_DEVICE (object));
 	g_free (priv->name);
+	ring_buffer_free (priv->buffer);
 
 	G_OBJECT_CLASS (network_device_parent_class)->finalize (object);
 }
@@ -417,9 +433,11 @@ network_device_poll_info (NetworkDevice *device)
 	priv->tx = netload.bytes_out;
 	priv->rx = netload.bytes_in;
 
+	ring_buffer_append (priv->buffer, priv->rx, priv->tx);
+
 	priv->state = 0;
 	priv->state |= (netload.if_flags & (1L << GLIBTOP_IF_FLAGS_UP) ? NETWORK_DEVICE_STATE_UP : 0);
-	priv->state |= (netload.if_flags & (1L << GLIBTOP_IF_FLAGS_RUNNING) ? NETWORK_DEVICE_STATE_UP : 0);
+	priv->state |= (netload.if_flags & (1L << GLIBTOP_IF_FLAGS_RUNNING) ? NETWORK_DEVICE_STATE_RUNNING : 0);
 
 	priv->ipv4_addr = format_ipv4(netload.address);
 	priv->netmask = format_ipv4(netload.subnet);
